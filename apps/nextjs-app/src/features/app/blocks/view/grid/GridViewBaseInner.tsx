@@ -321,6 +321,7 @@ export const GridViewBaseInner: React.FC<IGridViewBaseInnerProps> = (
     paste,
     clear,
     deleteRecords,
+    archiveRecords,
     duplicateRecords,
     clearProgress,
     clearSummary,
@@ -657,6 +658,21 @@ export const GridViewBaseInner: React.FC<IGridViewBaseInnerProps> = (
         .filter(Boolean);
     }
 
+    const confirmAndArchiveRecords = async (recordCount: number) => {
+      const confirmed = await confirm({
+        title: t('table:table.actionTips.archiveRecordConfirmTitle'),
+        description: t('table:table.actionTips.archiveRecordConfirmDescription', {
+          recordCount,
+        }),
+        confirmText: t('table:table.actionTips.archiveRecord'),
+        cancelText: t('common:actions.cancel'),
+      });
+      if (!confirmed) return;
+
+      await archiveRecords(selection, recordMap);
+      gridRef.current?.setSelection(emptySelection);
+    };
+
     if (isCellSelection || isRowSelection) {
       const rowStart = isCellSelection ? ranges[0][1] : ranges[0][0];
       const rowEnd = isCellSelection ? ranges[1][1] : ranges[0][1];
@@ -694,6 +710,7 @@ export const GridViewBaseInner: React.FC<IGridViewBaseInnerProps> = (
             deleteRecords(selection, recordMap);
             gridRef.current?.setSelection(emptySelection);
           },
+          archiveRecords: () => confirmAndArchiveRecords(getEffectRows(selection, realRowCount)),
           duplicateRecord: async () => {
             await duplicateRecords(selection);
           },
@@ -736,6 +753,7 @@ export const GridViewBaseInner: React.FC<IGridViewBaseInnerProps> = (
             deleteRecords(selection, recordMap);
             gridRef.current?.setSelection(emptySelection);
           },
+          archiveRecords: () => confirmAndArchiveRecords(1),
           copyRecordUrl: async () => {
             await copyRecordUrl(record?.id);
           },

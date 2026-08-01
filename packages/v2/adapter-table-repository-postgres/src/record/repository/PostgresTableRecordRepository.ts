@@ -1,4 +1,4 @@
-import { tableI18nKeys } from '@teable/i18n-keys';
+import { sdkErrorI18nKeys } from '@teable/i18n-keys';
 import * as core from '@teable/v2-core';
 import {
   domainError,
@@ -7,10 +7,12 @@ import {
   type DomainError,
   type IHasher,
   type DeleteManyResult,
+  generatePrefixedId,
   generateUuid,
   type RecordMutationResult,
   type BatchRecordMutationResult,
   type InsertOptions,
+  type ArchiveTrashRowInput,
 } from '@teable/v2-core';
 import { inject, injectable } from '@teable/v2-di';
 import type { V1TeableDatabase } from '@teable/v2-postgres-schema';
@@ -37,6 +39,7 @@ import type {
 } from '../computed';
 import { buildSeedTaskInput } from '../computed';
 import { v2RecordRepositoryPostgresTokens } from '../di/tokens';
+import { normalizeStoredLinkItems } from '../normalizeLinkItems';
 import type { DynamicDB } from '../query-builder';
 import {
   RecordInsertBuilder,
@@ -56,7 +59,6 @@ import {
   type OutgoingLinkDeleteOp,
 } from '../visitors';
 import { CellValueMutateVisitor } from '../visitors/CellValueMutateVisitor';
-import { normalizeStoredLinkItems } from '../normalizeLinkItems';
 import type { LinkExclusivityConstraint } from '../visitors/LinkExclusivityConstraintCollector';
 import { buildRecordWhereClause } from './buildRecordWhereClause';
 import type {
@@ -295,6 +297,10 @@ const cleanupRestoredRecordTrash = async (
 
   await db.deleteFrom('table_trash').where('id', 'in', staleTrashIds).execute();
 };
+
+// Mirrors @teable/core generateRecordTrashId ('rtr' + 16 random chars).
+const RECORD_TRASH_ID_PREFIX = 'rtr';
+const RECORD_TRASH_ID_LENGTH = 16;
 
 /**
  * Internal insert options that extend core InsertOptions with PostgreSQL-specific flags.
@@ -1012,9 +1018,7 @@ const loadBeforeImageForRecord = async (
       )
     );
   } catch (error) {
-    return err(
-      wrapDatabaseError(error, 'query', { tableName, recordId: recordId.toString() }, undefined)
-    );
+    return err(wrapDatabaseError(error, 'query', { tableName, recordId: recordId.toString() }));
   }
 };
 
@@ -1339,9 +1343,7 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
           });
         } catch (error) {
           await snapshotCaptureSession?.abort();
-          return err(
-            wrapDatabaseError(error, 'insert', { tableName, fields: table.getFields() }, context.$t)
-          );
+          return err(wrapDatabaseError(error, 'insert', { tableName, fields: table.getFields() }));
         }
       }.bind(this)
     );
@@ -1611,6 +1613,16 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
 
         this.logger.debug(`insertMany:table=${tableName}`, { count: records.length });
 
+        // Restore of archived records: drop the attachment reference rows kept at archive
+        // time BEFORE the insert statements write fresh ones, or usage double-counts.
+        if (options?.cleanupAttachmentRefRecordIds?.length) {
+          await db
+            .deleteFrom('attachments_table')
+            .where('table_id', '=', table.id().toString())
+            .where('record_id', 'in', [...options.cleanupAttachmentRefRecordIds])
+            .execute();
+        }
+
         // Legacy CreatedBy/LastModifiedBy columns may still be GENERATED ALWAYS even when
         // field meta says otherwise — strip them so PostgreSQL accepts the INSERT (T6146).
         await stripPhysicallyGeneratedColumnsFromInsertValues(
@@ -1747,9 +1759,7 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
           });
         } catch (error) {
           await snapshotCaptureSession?.abort();
-          return err(
-            wrapDatabaseError(error, 'insert', { tableName, fields: table.getFields() }, context.$t)
-          );
+          return err(wrapDatabaseError(error, 'insert', { tableName, fields: table.getFields() }));
         }
       }.bind(this)
     );
@@ -2157,6 +2167,9 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
             .updateTable(tableName)
             .set(setClauses)
             .where(RECORD_ID_COLUMN, '=', recordIdStr);
+          if (options?.expectedVersion != null) {
+            updateQuery = updateQuery.where(VERSION_COLUMN, '=', options.expectedVersion);
+          }
           if (distinctUserFieldWhere) {
             updateQuery = updateQuery.where(distinctUserFieldWhere);
           }
@@ -2218,16 +2231,11 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
         } catch (error) {
           await snapshotCaptureSession?.abort();
           return err(
-            wrapDatabaseError(
-              error,
-              'update',
-              {
-                tableName,
-                recordId: recordIdStr,
-                fields: table.getFields(),
-              },
-              context.$t
-            )
+            wrapDatabaseError(error, 'update', {
+              tableName,
+              recordId: recordIdStr,
+              fields: table.getFields(),
+            })
           );
         }
       }.bind(this)
@@ -2460,15 +2468,10 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
           });
         } catch (error) {
           return err(
-            wrapDatabaseError(
-              error,
-              'update',
-              {
-                tableName,
-                fields: table.getFields(),
-              },
-              context.$t
-            )
+            wrapDatabaseError(error, 'update', {
+              tableName,
+              fields: table.getFields(),
+            })
           );
         }
       }.bind(this)
@@ -2776,12 +2779,7 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
           } catch (error) {
             batchSpan?.recordError(describeError(error));
             return err(
-              wrapDatabaseError(
-                error,
-                'update',
-                { tableName, fields: table.getFields() },
-                context.$t
-              )
+              wrapDatabaseError(error, 'update', { tableName, fields: table.getFields() })
             );
           } finally {
             batchSpan?.end();
@@ -3046,6 +3044,85 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
     return ok(undefined);
   }
 
+  // Re-persists archive snapshot rows (reason 'archived') during the redo replay of an
+  // archive operation — write-ahead within the surrounding delete transaction.
+  async insertArchiveTrashRows(
+    context: core.IExecutionContext,
+    table: core.Table,
+    rows: ReadonlyArray<ArchiveTrashRowInput>
+  ): Promise<Result<void, DomainError>> {
+    if (rows.length === 0) {
+      return ok(undefined);
+    }
+
+    try {
+      const db = resolvePostgresDbOrTx(this.db, context) as unknown as Kysely<DynamicDB>;
+      await db
+        .insertInto('record_trash')
+        .values(
+          rows.map((row) => ({
+            id: generatePrefixedId(RECORD_TRASH_ID_PREFIX, RECORD_TRASH_ID_LENGTH),
+            table_id: table.id().toString(),
+            record_id: row.recordId,
+            snapshot: row.snapshot,
+            created_by: row.createdBy,
+            created_time: new Date(row.createdTime),
+            operation_id: row.operationId ?? null,
+            reason: 'archived',
+            record_created_time: row.recordCreatedTime ? new Date(row.recordCreatedTime) : null,
+            record_created_by: row.recordCreatedBy ?? null,
+            record_last_modified_time: row.recordLastModifiedTime
+              ? new Date(row.recordLastModifiedTime)
+              : null,
+            record_last_modified_by: row.recordLastModifiedBy ?? null,
+          }))
+        )
+        .execute();
+      return ok(undefined);
+    } catch (error) {
+      return err(wrapDatabaseError(error, 'insert', { tableName: 'record_trash' }));
+    }
+  }
+
+  // Of the given ids, the ones that still hold a record_trash row with the given
+  // reason — the undo-replay purge guard (see the port doc). Chunked to stay under
+  // the bind-parameter limit on bulk-operation-sized id lists.
+  async listTrashedRecordIds(
+    context: core.IExecutionContext,
+    table: core.Table,
+    recordIds: ReadonlyArray<string>,
+    reason: core.IRecordRemovalReason
+  ): Promise<Result<ReadonlySet<string>, DomainError>> {
+    const existing = new Set<string>();
+    if (recordIds.length === 0) {
+      return ok(existing);
+    }
+
+    try {
+      const db = resolvePostgresDbOrTx(this.db, context) as unknown as Kysely<DynamicDB>;
+      const tableId = table.id().toString();
+      const CHUNK = 5000;
+      for (let index = 0; index < recordIds.length; index += CHUNK) {
+        const rows = await db
+          .selectFrom('record_trash')
+          .select('record_id')
+          .distinct()
+          .where('table_id', '=', tableId)
+          .where('reason', '=', reason)
+          .where('record_id', 'in', [...recordIds.slice(index, index + CHUNK)])
+          .execute();
+        for (const row of rows) {
+          if (typeof row.record_id === 'string') {
+            existing.add(row.record_id);
+          }
+        }
+      }
+      return ok(existing);
+    } catch (error) {
+      return err(wrapDatabaseError(error, 'query', { tableName: 'record_trash' }));
+    }
+  }
+
   async deleteMany(
     context: core.IExecutionContext,
     table: core.Table,
@@ -3264,16 +3341,11 @@ export class PostgresTableRecordRepository implements core.ITableRecordRepositor
         } catch (error) {
           await snapshotCaptureSession?.abort();
           return err(
-            wrapDatabaseError(
-              error,
-              'delete',
-              {
-                tableName,
-                count: recordIds.length,
-                fields: table.getFields(),
-              },
-              context.$t
-            )
+            wrapDatabaseError(error, 'delete', {
+              tableName,
+              count: recordIds.length,
+              fields: table.getFields(),
+            })
           );
         }
       }.bind(this)
@@ -4611,20 +4683,6 @@ const acquireLinkedRecordLocks = async (
  * @param constraints - Array of exclusivity constraints to validate
  * @returns Ok if all constraints pass, Err with validation error if any fail
  */
-const i18nOrFallback = (
-  t: core.IExecutionContext['$t'],
-  key: Parameters<NonNullable<core.IExecutionContext['$t']>>[0],
-  fallback: string,
-  options?: Record<string, unknown>
-): string => {
-  if (!t) return fallback;
-  try {
-    return t(key, options);
-  } catch {
-    return fallback;
-  }
-};
-
 const validateLinkExclusivityConstraints = async (
   context: core.IExecutionContext,
   db: Kysely<DynamicDB>,
@@ -4742,16 +4800,13 @@ const validateLinkExclusivityConstraints = async (
         if (conflictingRecords.length > 0) {
           const firstConstraint = group.constraints[0];
           const conflictingIds = conflictingRecords.map((r) => r.record_id as string);
-          const message = i18nOrFallback(
-            context.$t,
-            tableI18nKeys.validation.link.one_many_duplicate,
-            'Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.',
-            undefined
-          );
+          const message =
+            'Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.';
           return err(
             domainError.validation({
               message,
               code: 'validation.link.one_many_duplicate',
+              localization: { i18nKey: sdkErrorI18nKeys.custom.linkOneManyDuplicate },
               details: {
                 fieldId: firstConstraint.fieldId.toString(),
                 conflictingRecordIds: conflictingIds,
@@ -4784,16 +4839,13 @@ const validateLinkExclusivityConstraints = async (
         if (conflictingRecords.length > 0) {
           const firstConstraint = group.constraints[0];
           const conflictingIds = conflictingRecords.map((r) => r.foreign_id as string);
-          const message = i18nOrFallback(
-            context.$t,
-            tableI18nKeys.validation.link.one_many_duplicate,
-            'Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.',
-            undefined
-          );
+          const message =
+            'Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.';
           return err(
             domainError.validation({
               message,
               code: 'validation.link.one_many_duplicate',
+              localization: { i18nKey: sdkErrorI18nKeys.custom.linkOneManyDuplicate },
               details: {
                 fieldId: firstConstraint.fieldId.toString(),
                 conflictingRecordIds: conflictingIds,
@@ -4855,17 +4907,14 @@ const validateInsertExclusivityConstraints = async (
       for (const foreignRecordId of constraint.linkedForeignRecordIds) {
         const existingSourceId = seenForeignRecordIds.get(foreignRecordId);
         if (existingSourceId && existingSourceId !== constraint.sourceRecordId) {
-          const message = i18nOrFallback(
-            context.$t,
-            tableI18nKeys.validation.link.batch_duplicate,
-            'Cannot link record(s): already linked by another record in the same batch. In one-to-many relationships, each record can only belong to one parent.',
-            undefined
-          );
+          const message =
+            'Cannot link record(s): already linked by another record in the same batch. In one-to-many relationships, each record can only belong to one parent.';
           // Two different source records trying to link the same foreign record
           return err(
             domainError.validation({
               message,
               code: 'validation.link.batch_duplicate',
+              localization: { i18nKey: sdkErrorI18nKeys.custom.linkBatchDuplicate },
               details: {
                 fieldId: fieldIdStr,
                 foreignRecordId,
@@ -4975,17 +5024,14 @@ const validateInsertExclusivityConstraints = async (
 
         if (conflictingRecords.length > 0) {
           const conflictingIds = conflictingRecords.map((r) => r.record_id as string);
-          const message = i18nOrFallback(
-            context.$t,
-            tableI18nKeys.validation.link.one_many_duplicate,
-            'Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.',
-            undefined
-          );
+          const message =
+            'Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.';
           const firstConstraint = group.constraints[0];
           return err(
             domainError.validation({
               message,
               code: 'validation.link.one_many_duplicate',
+              localization: { i18nKey: sdkErrorI18nKeys.custom.linkOneManyDuplicate },
               details: {
                 fieldId: firstConstraint.fieldId.toString(),
                 conflictingRecordIds: conflictingIds,
@@ -5012,17 +5058,14 @@ const validateInsertExclusivityConstraints = async (
 
         if (conflictingRecords.length > 0) {
           const conflictingIds = conflictingRecords.map((r) => r.foreign_id as string);
-          const message = i18nOrFallback(
-            context.$t,
-            tableI18nKeys.validation.link.one_many_duplicate,
-            'Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.',
-            undefined
-          );
+          const message =
+            'Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.';
           const firstConstraint = group.constraints[0];
           return err(
             domainError.validation({
               message,
               code: 'validation.link.one_many_duplicate',
+              localization: { i18nKey: sdkErrorI18nKeys.custom.linkOneManyDuplicate },
               details: {
                 fieldId: firstConstraint.fieldId.toString(),
                 conflictingRecordIds: conflictingIds,

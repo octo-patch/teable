@@ -102,17 +102,6 @@
     "help": "Weitere Informationen finden Sie im <HelpCenter />.",
     "helpCenter": "Hilfe-Center"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "Verknüpfung nicht möglich: Im selben Batch wurde der Datensatz bereits von einem anderen Datensatz verknüpft. In Eins-zu-viele-Beziehungen kann jeder untergeordnete Datensatz nur zu einem übergeordneten Datensatz gehören.",
-      "one_many_duplicate": "Verknüpfung nicht möglich: Der Datensatz ist bereits mit einem anderen Datensatz verknüpft. In Eins-zu-viele-Beziehungen kann jeder untergeordnete Datensatz nur zu einem übergeordneten Datensatz gehören.",
-      "one_one_duplicate": "Verknüpfung nicht möglich: Der Zieldatensatz ist in einer Eins-zu-eins-Beziehung bereits mit einem anderen Datensatz verknüpft."
-    },
-    "field": {
-      "maxColumnLimit": "Die Tabelle \"{{tableName}}\" darf höchstens {{maxFieldCount}} Felder enthalten.",
-      "requiredExistingValues": "Feld \"{{fieldName}}\" kann nicht als erforderlich markiert werden, da vorhandene Datensätze leere Werte enthalten."
-    }
-  },
   "field": {
     "advancedProps": "Erweiterte Eigenschaften",
     "hide": "verstecken",
@@ -478,6 +467,11 @@
       "fillFailed": "Füllen fehlgeschlagen",
       "clearing": "Leeren...",
       "clearSuccessful": "Leeren erfolgreich",
+      "archiveRecordConfirmTitle": "Datensätze archivieren",
+      "archiveRecordConfirmDescription": "Diese Aktion archiviert {{recordCount}} Datensätze. Archivierte Datensätze können im Tabellenarchiv eingesehen und wiederhergestellt werden.",
+      "archiveRecord": "Archivieren",
+      "archiving": "Archiviere...",
+      "archiveSuccessful": "Archivierung erfolgreich",
       "deleting": "Lösche...",
       "deleteSuccessful": "Löschen erfolgreich",
       "deleteStream": {
@@ -834,6 +828,8 @@
     "insertRecordBelow": "Datensatz <input /> unterhalb einfügen",
     "deleteRecord": "Datensätze löschen",
     "deleteAllSelectedRecords": "Alle ausgewählten Datensätze löschen",
+    "archiveRecord": "Datensatz archivieren",
+    "archiveAllSelectedRecords": "Alle ausgewählten Datensätze archivieren",
     "editField": "Feld bearbeiten",
     "insertFieldLeft": "Links einfügen",
     "insertFieldRight": "Rechts einfügen",
@@ -901,11 +897,49 @@
     "title": "Möchten Sie mehrere Datensätze hinzufügen?",
     "description": "Die {{count}} Datensätze werden der Tabelle hinzugefügt."
   },
+  "tableArchive": {
+    "title": "Tabellenarchiv",
+    "menuTitle": "Archiv",
+    "archivedTime": "Archivierungszeit",
+    "archivedBy": "Archiviert von",
+    "recordDetail": "Datensatzdetails",
+    "empty": "Keine archivierten Datensätze",
+    "allCreators": "Alle Ersteller",
+    "filterArchivedTime": "Archivierungszeit",
+    "searchPlaceholder": "Archivierte Datensätze durchsuchen",
+    "clearFilter": "Filter zurücksetzen",
+    "export": "CSV exportieren",
+    "exporting": "Exportiere… {{count}} Zeilen",
+    "exportSucceed": "Export abgeschlossen, Download startet",
+    "restoreSelected": "Wiederherstellen ({{count}})",
+    "permanentDeleteSelected": "Endgültig löschen ({{count}})",
+    "permanentDeleteConfirm": "{{count}} archivierte Datensätze endgültig löschen? Dies kann nicht rückgängig gemacht werden.",
+    "permanentDeleteSucceed": "Endgültig gelöscht",
+    "resetArchive": "Archiv leeren",
+    "resetArchiveConfirm": "Alle archivierten Datensätze dieser Tabelle löschen? Dies kann nicht rückgängig gemacht werden.",
+    "resetSucceed": "Archiv geleert",
+    "orderBy": {
+      "archivedTime": "Nach Archivierungszeit sortieren",
+      "recordCreatedTime": "Nach Erstellungszeit sortieren",
+      "recordLastModifiedTime": "Nach letzter Änderung sortieren"
+    }
+  },
   "tableTrash": {
     "title": "Papierkorb",
     "resourceType": "Typ",
     "deletedResource": "Ressource",
-    "moreResources": "und {{count}} weitere"
+    "moreResources": "und {{count}} weitere",
+    "deletedTime": "Löschzeitpunkt",
+    "deletedBy": "Gelöscht von",
+    "filterAllTypes": "Alle Typen",
+    "filterAllUsers": "Alle Benutzer",
+    "filterDeletedTime": "Löschzeitpunkt",
+    "clearFilter": "Filter zurücksetzen",
+    "recordsDialogTitle": "Gelöschte Datensätze ({{count}})",
+    "recordDetail": "Datensatzdetails",
+    "filterAllCreators": "Alle Ersteller",
+    "filterCreatedTime": "Erstellungszeit",
+    "searchPlaceholder": "Datensätze durchsuchen"
   },
   "baseShare": {
     "shareTitle": "Teilen",
@@ -935,7 +969,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "Kann als Kopie speichern",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "Kopie in Ihrem Bereich speichern",
+    "editRequiresLogin": "Nach der Anmeldung können Sie Datensätze bearbeiten",
     "enterPassword": "Passwort eingeben",
     "allowCopyData": "Betrachtern erlauben, Daten zu kopieren",
     "sharedNode": "Geteilter Knoten",

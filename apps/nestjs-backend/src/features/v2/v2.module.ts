@@ -28,6 +28,8 @@ import { V2RecordHistoryService } from './v2-record-history.service';
 import { V2SchemaOperationRunnerService } from './v2-schema-operation-runner.service';
 import { V2UserRenamePropagationService } from './v2-user-rename-propagation.service';
 import { V2ViewCompatService } from './v2-view-compat.service';
+import { V2ViewDeleteSideEffectService } from './v2-view-delete-side-effect.service';
+import { V2ViewShareSideEffectService } from './v2-view-share-side-effect.service';
 import { V2Controller } from './v2.controller';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -128,6 +130,8 @@ const toErrorMessage = (body: unknown): string => {
     V2RecordHistoryService,
     V2SchemaOperationRunnerService,
     V2ViewCompatService,
+    V2ViewDeleteSideEffectService,
+    V2ViewShareSideEffectService,
     UndoRedoStackService,
     ComputedOutboxRedriveService,
     ComputedOutboxMonitorService,

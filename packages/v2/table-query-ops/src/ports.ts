@@ -1,4 +1,10 @@
-import type { DomainError, IExecutionContext, Table, TableId } from '@teable/v2-core';
+import type {
+  DomainError,
+  IExecutionContext,
+  IRecordSearchAccessPath,
+  Table,
+  TableId,
+} from '@teable/v2-core';
 import { ok, type Result } from 'neverthrow';
 
 import type {
@@ -107,7 +113,9 @@ export interface TableQueryRemediationExecutor {
 
 export type ReconcileTableSearchAccessPathInput = {
   readonly table: Table;
-  readonly mode: 'create' | 'rebuild';
+  // 'drop' removes the managed generated column + index and disables the
+  // table's config — the table-level kill switch for the indexed search path.
+  readonly mode: 'create' | 'rebuild' | 'drop';
   readonly expectedDefinitionKey?: string;
   readonly semantics?: 'substring' | 'lexical';
   readonly provider?: 'pg_trgm' | 'pg_bigm' | 'tsvector';
@@ -119,7 +127,7 @@ export type ReconcileTableSearchAccessPathInput = {
 };
 
 export type ReconcileTableSearchAccessPathResult = {
-  readonly action: 'created' | 'rebuilt' | 'verified';
+  readonly action: 'created' | 'rebuilt' | 'verified' | 'dropped';
   readonly tableId: string;
   readonly definitionKey: string;
   readonly generatedColumnName: string;
@@ -128,7 +136,7 @@ export type ReconcileTableSearchAccessPathResult = {
   readonly semantics?: 'substring' | 'lexical';
   readonly provider?: 'pg_trgm' | 'pg_bigm' | 'tsvector';
   readonly fieldIds: readonly string[];
-  readonly status: 'ready';
+  readonly status: 'ready' | 'disabled';
   readonly planEvidence?: unknown;
 };
 
@@ -171,6 +179,18 @@ export interface TableSearchVectorStatusReader {
     context: IExecutionContext,
     tableId: string
   ): Promise<Result<TableSearchVectorStatus, DomainError>>;
+}
+
+/**
+ * Resolves the ready-to-use record search access path for a table, or
+ * undefined when none is configured/ready. This is the read-path port the app
+ * layer uses instead of querying the config storage directly.
+ */
+export interface TableSearchAccessPathResolver {
+  resolve(
+    context: IExecutionContext,
+    tableId: string
+  ): Promise<Result<IRecordSearchAccessPath | undefined, DomainError>>;
 }
 
 export type TableSearchAccessPathProvider = 'pg_trgm' | 'pg_bigm';

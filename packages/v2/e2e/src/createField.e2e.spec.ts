@@ -341,7 +341,7 @@ describe('v2 http createField (e2e)', () => {
       const parsed = createFieldErrorResponseSchema.safeParse(rawBody);
       expect(parsed.success).toBe(true);
       if (!parsed.success || parsed.data.ok) return;
-      expect(parsed.data.error.code).toBe('validation.field.not_null');
+      expect(parsed.data.error.code).toBe('validation.field.required_existing_values');
     } finally {
       await ctx.deleteTable(table.id).catch(() => undefined);
     }

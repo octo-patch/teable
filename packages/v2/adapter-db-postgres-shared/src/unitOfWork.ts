@@ -28,6 +28,9 @@ class UnitOfWorkAbort extends Error {
   constructor(readonly error: DomainError) {
     super(error.message);
     this.name = 'UnitOfWorkAbort';
+    if (error.stack) {
+      this.stack = error.stack;
+    }
   }
 }
 

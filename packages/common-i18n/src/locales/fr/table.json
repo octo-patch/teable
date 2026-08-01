@@ -105,17 +105,6 @@
     "help": "Visitez le <HelpCenter /> pour plus d'informations",
     "helpCenter": "Centre d'aide"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "Impossible de lier l'enregistrement : dans ce même lot, il est déjà lié par un autre enregistrement. Dans une relation un-à-plusieurs, chaque enregistrement enfant ne peut appartenir qu'à un seul enregistrement parent.",
-      "one_many_duplicate": "Impossible de lier l'enregistrement : il est déjà lié à un autre enregistrement. Dans une relation un-à-plusieurs, chaque enregistrement enfant ne peut appartenir qu'à un seul enregistrement parent.",
-      "one_one_duplicate": "Impossible de lier l'enregistrement : l'enregistrement cible est déjà lié par un autre enregistrement dans une relation un-à-un."
-    },
-    "field": {
-      "maxColumnLimit": "La table \"{{tableName}}\" peut contenir au maximum {{maxFieldCount}} champs.",
-      "requiredExistingValues": "Impossible de rendre le champ \"{{fieldName}}\" obligatoire, car des enregistrements existants contiennent des valeurs vides."
-    }
-  },
   "field": {
     "advancedProps": "Propriétés avancées",
     "hide": "cacher",
@@ -474,6 +463,11 @@
       "fillFailed": "Échec du remplissage",
       "clearing": "Effacement en cours...",
       "clearSuccessful": "Effacement réussi",
+      "archiveRecordConfirmTitle": "Archiver les enregistrements",
+      "archiveRecordConfirmDescription": "Cette action archivera {{recordCount}} enregistrements. Les enregistrements archivés peuvent être consultés et restaurés depuis l'archive de la table.",
+      "archiveRecord": "Archiver",
+      "archiving": "Archivage...",
+      "archiveSuccessful": "Archivage réussi",
       "deleting": "Suppression en cours...",
       "deleteSuccessful": "Suppression réussie",
       "deleteStream": {
@@ -830,6 +824,8 @@
     "insertRecordBelow": "Insérer un enregistrement en dessous",
     "deleteRecord": "Supprimer l'enregistrement",
     "deleteAllSelectedRecords": "Supprimer tous les enregistrements sélectionnés",
+    "archiveRecord": "Archiver l'enregistrement",
+    "archiveAllSelectedRecords": "Archiver tous les enregistrements sélectionnés",
     "editField": "Modifier le champ",
     "insertFieldLeft": "Insérer à gauche",
     "insertFieldRight": "Insérer à droite",
@@ -885,11 +881,49 @@
   },
   "lastModifiedTime": "Dernière modification",
   "lastModify": "Dernière modification : ",
+  "tableArchive": {
+    "title": "Archive de la table",
+    "menuTitle": "Archives",
+    "archivedTime": "Date d'archivage",
+    "archivedBy": "Archivé par",
+    "recordDetail": "Détail de l'enregistrement",
+    "empty": "Aucun enregistrement archivé",
+    "allCreators": "Tous les créateurs",
+    "filterArchivedTime": "Date d'archivage",
+    "searchPlaceholder": "Rechercher des enregistrements archivés",
+    "clearFilter": "Effacer les filtres",
+    "export": "Exporter en CSV",
+    "exporting": "Exportation… {{count}} lignes",
+    "exportSucceed": "Exportation terminée, téléchargement en cours",
+    "restoreSelected": "Restaurer ({{count}})",
+    "permanentDeleteSelected": "Supprimer définitivement ({{count}})",
+    "permanentDeleteConfirm": "Supprimer définitivement {{count}} enregistrements archivés ? Cette action est irréversible.",
+    "permanentDeleteSucceed": "Supprimé définitivement",
+    "resetArchive": "Vider l'archive",
+    "resetArchiveConfirm": "Vider tous les enregistrements archivés de cette table ? Cette action est irréversible.",
+    "resetSucceed": "Archive vidée",
+    "orderBy": {
+      "archivedTime": "Trier par date d'archivage",
+      "recordCreatedTime": "Trier par date de création",
+      "recordLastModifiedTime": "Trier par dernière modification"
+    }
+  },
   "tableTrash": {
     "title": "Corbeille",
     "resourceType": "Type",
     "deletedResource": "Ressource",
-    "moreResources": "et {{count}} de plus"
+    "moreResources": "et {{count}} de plus",
+    "deletedTime": "Date de suppression",
+    "deletedBy": "Supprimé par",
+    "filterAllTypes": "Tous les types",
+    "filterAllUsers": "Tous les utilisateurs",
+    "filterDeletedTime": "Date de suppression",
+    "clearFilter": "Effacer les filtres",
+    "recordsDialogTitle": "Enregistrements supprimés ({{count}})",
+    "recordDetail": "Détails de l'enregistrement",
+    "filterAllCreators": "Tous les créateurs",
+    "filterCreatedTime": "Date de création",
+    "searchPlaceholder": "Rechercher des enregistrements"
   },
   "baseShare": {
     "shareTitle": "Partager",
@@ -919,7 +953,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "Peut enregistrer comme copie",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "Enregistrez une copie dans votre espace",
+    "editRequiresLogin": "Connectez-vous pour modifier les enregistrements",
     "enterPassword": "Entrer le mot de passe",
     "allowCopyData": "Permettre aux spectateurs de copier les données",
     "sharedNode": "Nœud partagé",

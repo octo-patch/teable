@@ -11,9 +11,9 @@ import {
 } from '../../../configs/computed-outbox-trigger.config';
 import type { IComputedOutboxMaintenanceTarget } from '../../../global/data-db-client-manager.service';
 import { DataDbClientManager } from '../../../global/data-db-client-manager.service';
+import { mapWithConcurrency } from '../../../utils/map-with-concurrency';
 import { IComputedOutboxWakeupAppPublisher } from './computed-outbox-wakeup.publisher';
 import { COMPUTED_OUTBOX_WAKEUP_PUBLISHER } from './constants';
-import { mapWithConcurrency } from './map-with-concurrency';
 
 /** Re-arms durable tasks at startup and performs a low-frequency actionable-only reconciliation. */
 @Injectable()

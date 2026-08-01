@@ -1,19 +1,37 @@
 import {
+  managedSearchDocumentColumnPrefixes,
+  managedSearchPrefixLikePattern,
+} from '@teable/v2-adapter-db-postgres-shared';
+import {
   AbstractSpecFilterVisitor,
   DbFieldName,
   domainError,
   FieldValueTypeVisitor,
   FormulaField,
   LookupField,
+  TableAddViewSpec,
 } from '@teable/v2-core';
+import type { IPgTypeValidationStrategy } from '@teable/v2-formula-sql-pg';
 import type {
   TableAddFieldSpec,
   TableAddFieldsSpec,
+  TableEnsureViewRowOrderSpec,
+  TableRemoveViewSpec,
+  TableRenameViewSpec,
+  TableUpdateViewDescriptionSpec,
+  TableUpdateViewLockedSpec,
+  TableUpdateViewOrderSpec,
+  TableUpdateViewOptionsSpec,
+  TableUpdateViewShareIdSpec,
+  TableUpdateViewShareMetaSpec,
+  TableUpdateViewShareStateSpec,
   TableAddSelectOptionsSpec,
   TableDuplicateFieldSpec,
   TableRemoveFieldSpec,
   TableByBaseIdSpec,
   TableByIdSpec,
+  TableByViewIdSpec,
+  TableWithViewIdsSpec,
   TableByIncomingReferenceToTableSpec,
   TableByIdsSpec,
   TableByNameLikeSpec,
@@ -107,6 +125,7 @@ type TableSchemaUpdateVisitorParams = {
   recordUpdateCollector?: {
     add(update: RecordUpdateDTO): void;
   };
+  typeValidationStrategy?: IPgTypeValidationStrategy;
 };
 
 type SelectOptionRecordUpdateRow = {
@@ -219,8 +238,12 @@ export class TableSchemaUpdateVisitor
             AND NOT a.attisdropped
             AND a.attgenerated = 's'
             AND (
-              a.attname LIKE '\\_\\_tqops\\_tsv\\_%' ESCAPE '\\'
-              OR a.attname LIKE '\\_\\_tqops\\_search\\_%' ESCAPE '\\'
+              ${managedSearchDocumentColumnPrefixes
+                .map(
+                  (prefix) =>
+                    `a.attname LIKE ${quoteSqlLiteral(managedSearchPrefixLikePattern(prefix))} ESCAPE '\\'`
+                )
+                .join('\n              OR ')}
             )
         LOOP
           EXECUTE format(
@@ -570,6 +593,7 @@ export class TableSchemaUpdateVisitor
         tableId: this.params.tableId,
         dbFieldName: dbFieldNameResult.value,
         fieldId: field.id().toString(),
+        typeValidationStrategy: this.params.typeValidationStrategy,
       },
       previousFieldResult.value,
       nextFieldResult.value
@@ -678,6 +702,88 @@ export class TableSchemaUpdateVisitor
     });
   }
 
+  visitTableAddView(
+    spec: TableAddViewSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    if (spec.view().type().toString() !== 'grid') {
+      const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+      return this.addCond(statements).map(() => statements);
+    }
+
+    const { db, schema, tableName } = this.params;
+    const quoteIdentifier = (value: string): string => `"${value.replaceAll('"', '""')}"`;
+    const fullTableName = schema
+      ? `${quoteIdentifier(schema)}.${quoteIdentifier(tableName)}`
+      : quoteIdentifier(tableName);
+    const columnName = spec.view().id().toRowOrderColumnName();
+    const indexName = `idx_${columnName}`;
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [
+      {
+        scope: 'data',
+        compile: () =>
+          sql`ALTER TABLE ${sql.raw(fullTableName)} ADD COLUMN IF NOT EXISTS ${sql.ref(columnName)} double precision`.compile(
+            db
+          ),
+      },
+      {
+        scope: 'data',
+        compile: () =>
+          sql`UPDATE ${sql.raw(fullTableName)} SET ${sql.ref(columnName)} = "__auto_number" WHERE ${sql.ref(columnName)} IS NULL`.compile(
+            db
+          ),
+      },
+      {
+        scope: 'data',
+        compile: () =>
+          sql`CREATE INDEX IF NOT EXISTS ${sql.raw(quoteIdentifier(indexName))} ON ${sql.raw(fullTableName)} (${sql.ref(columnName)})`.compile(
+            db
+          ),
+      },
+    ];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableEnsureViewRowOrder(
+    spec: TableEnsureViewRowOrderSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    return this.visitTableAddView(TableAddViewSpec.create(spec.view()));
+  }
+
+  visitTableRemoveView(
+    _spec: TableRemoveViewSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableRenameView(
+    _spec: TableRenameViewSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableUpdateViewDescription(
+    _spec: TableUpdateViewDescriptionSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableUpdateViewLocked(
+    _spec: TableUpdateViewLockedSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableUpdateViewOrder(
+    _spec: TableUpdateViewOrderSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
   visitTableRemoveField(
     spec: TableRemoveFieldSpec
   ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
@@ -697,6 +803,34 @@ export class TableSchemaUpdateVisitor
 
   visitTableUpdateViewColumnMeta(
     _: TableUpdateViewColumnMetaSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableUpdateViewOptions(
+    _: TableUpdateViewOptionsSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableUpdateViewShareMeta(
+    _spec: TableUpdateViewShareMetaSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableUpdateViewShareId(
+    _spec: TableUpdateViewShareIdSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
+    return this.addCond(statements).map(() => statements);
+  }
+
+  visitTableUpdateViewShareState(
+    _spec: TableUpdateViewShareStateSpec
   ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
     const statements: ReadonlyArray<TableSchemaStatementBuilder> = [];
     return this.addCond(statements).map(() => statements);
@@ -775,6 +909,26 @@ export class TableSchemaUpdateVisitor
   ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
     return err(
       domainError.validation({ message: 'TableByIdSpec is not supported for table schema updates' })
+    );
+  }
+
+  visitTableByViewId(
+    _: TableByViewIdSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableByViewIdSpec is not supported for table schema updates',
+      })
+    );
+  }
+
+  visitTableWithViewIds(
+    _: TableWithViewIdsSpec
+  ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableWithViewIdsSpec is not supported for table schema updates',
+      })
     );
   }
 
@@ -894,6 +1048,7 @@ export class TableSchemaUpdateVisitor
         fieldId: newField.id().toString(),
         tableLocationsById: visitor.params.tableLocationsById,
         fieldsById: yield* visitor.buildCurrentTableFieldMetadataById(),
+        typeValidationStrategy: visitor.params.typeValidationStrategy,
       };
 
       const conversionStatements = yield* generateFieldConversionStatements(

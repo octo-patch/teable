@@ -21,6 +21,17 @@ export type ViewColumnMetaEntry = {
 
 export type ViewColumnMetaValue = Record<string, ViewColumnMetaEntry>;
 
+export type ViewColumnMetaPatch = {
+  readonly fieldId: FieldId;
+  readonly columnMeta: ViewColumnMetaEntry;
+};
+
+export type ViewColumnMetaChange = {
+  readonly fieldId: FieldId;
+  readonly previousColumnMeta?: ViewColumnMetaEntry;
+  readonly nextColumnMeta: ViewColumnMetaEntry;
+};
+
 const viewColumnMetaEntrySchema: z.ZodType<ViewColumnMetaEntry> = z.looseObject({
   order: z.number().nullable().optional(),
   visible: z.boolean().optional(),
@@ -112,6 +123,45 @@ export class ViewColumnMeta extends ValueObject {
 
   toDto(): ViewColumnMetaValue {
     return ViewColumnMeta.cloneValue(this.value);
+  }
+
+  applyPatches(
+    patches: ReadonlyArray<ViewColumnMetaPatch>
+  ): Result<
+    { columnMeta: ViewColumnMeta; changes: ReadonlyArray<ViewColumnMetaChange> },
+    DomainError
+  > {
+    const original = ViewColumnMeta.cloneValue(this.value);
+    const next = ViewColumnMeta.cloneValue(this.value);
+    const patchedFieldIds = new Map<string, FieldId>();
+
+    for (const patch of patches) {
+      const key = patch.fieldId.toString();
+      patchedFieldIds.set(key, patch.fieldId);
+      next[key] = {
+        ...(next[key] ?? {}),
+        ...patch.columnMeta,
+      };
+    }
+
+    const changes: ViewColumnMetaChange[] = [];
+    for (const [key, fieldId] of patchedFieldIds) {
+      const previousColumnMeta = original[key] ? { ...original[key] } : undefined;
+      const nextColumnMeta = { ...(next[key] ?? {}) };
+      if (previousColumnMeta && ViewColumnMeta.isSameEntry(previousColumnMeta, nextColumnMeta)) {
+        continue;
+      }
+      changes.push({
+        fieldId,
+        ...(previousColumnMeta ? { previousColumnMeta } : {}),
+        nextColumnMeta,
+      });
+    }
+
+    return ViewColumnMeta.create(next).map((columnMeta) => ({
+      columnMeta,
+      changes,
+    }));
   }
 
   private static orderFieldIds(

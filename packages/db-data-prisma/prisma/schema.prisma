@@ -193,15 +193,32 @@ model TableTrash {
 }
 
 model RecordTrash {
-  id          String   @id @default(cuid())
-  tableId     String   @map("table_id")
-  recordId    String   @map("record_id")
-  snapshot    String   @map("snapshot")
-  createdTime DateTime @default(now()) @map("created_time")
-  createdBy   String   @map("created_by")
+  id                     String    @id @default(cuid())
+  tableId                String    @map("table_id")
+  recordId               String    @map("record_id")
+  snapshot               String    @map("snapshot")
+  createdTime            DateTime  @default(now()) @map("created_time")
+  createdBy              String    @map("created_by")
+  reason                 String    @default("deleted") @map("reason")
+  recordCreatedTime      DateTime? @map("record_created_time")
+  recordCreatedBy        String?   @map("record_created_by")
+  recordLastModifiedTime DateTime? @map("record_last_modified_time")
+  recordLastModifiedBy   String?   @map("record_last_modified_by")
+  operationId            String?   @map("operation_id")
 
   @@index([tableId, recordId])
   @@map("record_trash")
+}
+
+model RecordRemovalTombstone {
+  id          String   @id
+  tableId     String   @map("table_id")
+  recordId    String   @map("record_id")
+  type        String
+  createdTime DateTime @default(now()) @map("created_time")
+
+  @@index([tableId, recordId])
+  @@map("record_removal_tombstone")
 }
 
 model Attachments {

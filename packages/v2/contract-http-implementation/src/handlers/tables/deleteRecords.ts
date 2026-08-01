@@ -5,14 +5,21 @@ import {
   mapDomainErrorToHttpStatus,
 } from '@teable/v2-contract-http';
 import { DeleteRecordsCommand } from '@teable/v2-core';
-import type { DeleteRecordsResult, ICommandBus, IExecutionContext } from '@teable/v2-core';
+import type {
+  DeleteRecordsResult,
+  ICommandBus,
+  IDeleteRecordsCommandOptions,
+  IExecutionContext,
+} from '@teable/v2-core';
 
 export const executeDeleteRecordsEndpoint = async (
   context: IExecutionContext,
   rawBody: unknown,
-  commandBus: ICommandBus
+  commandBus: ICommandBus,
+  // Internal-only options (e.g. archive removal); never populated from the HTTP contract.
+  options?: IDeleteRecordsCommandOptions
 ): Promise<IDeleteRecordsEndpointResult> => {
-  const commandResult = DeleteRecordsCommand.create(rawBody);
+  const commandResult = DeleteRecordsCommand.create(rawBody, options);
   if (commandResult.isErr()) {
     const error = commandResult.error;
     return {

@@ -13,6 +13,7 @@ const BASE_ID = `bse${'a'.repeat(16)}`;
 const TABLE_ID = `tbl${'b'.repeat(16)}`;
 const EXTRA_TABLE_ID = `tbl${'x'.repeat(16)}`;
 const FIELD_ID = `fld${'c'.repeat(16)}`;
+const SECOND_FIELD_ID = `fld${'f'.repeat(16)}`;
 const RECORD_ID = `rec${'d'.repeat(16)}`;
 const EXTRA_RECORD_ID = `rec${'e'.repeat(16)}`;
 const RUN_ID = `cur${'r'.repeat(16)}`;
@@ -35,11 +36,34 @@ const createPlan = (): ComputedUpdatePlan => ({
       fieldIds: [FieldId.create(FIELD_ID)._unsafeUnwrap()],
       level: 0,
     },
+    {
+      tableId: TableId.create(TABLE_ID)._unsafeUnwrap(),
+      fieldIds: [FieldId.create(SECOND_FIELD_ID)._unsafeUnwrap()],
+      level: 1,
+    },
   ],
   edges: [],
   estimatedComplexity: 1,
   changeType: 'update',
-  sameTableBatches: [],
+  sameTableBatches: [
+    {
+      tableId: TableId.create(TABLE_ID)._unsafeUnwrap(),
+      steps: [
+        {
+          tableId: TableId.create(TABLE_ID)._unsafeUnwrap(),
+          fieldIds: [FieldId.create(FIELD_ID)._unsafeUnwrap()],
+          level: 0,
+        },
+        {
+          tableId: TableId.create(TABLE_ID)._unsafeUnwrap(),
+          fieldIds: [FieldId.create(SECOND_FIELD_ID)._unsafeUnwrap()],
+          level: 1,
+        },
+      ],
+      minLevel: 0,
+      maxLevel: 1,
+    },
+  ],
 });
 
 describe('ComputedUpdateOutboxPayload', () => {
@@ -120,6 +144,7 @@ describe('ComputedUpdateOutboxPayload', () => {
       seedRecordIds: task.seedRecordIds,
       extraSeedRecords: task.extraSeedRecords,
       steps: task.steps,
+      sameTableBatches: task.sameTableBatches,
       edges: task.edges,
       estimatedComplexity: task.estimatedComplexity,
       changeType: task.changeType,
@@ -132,6 +157,16 @@ describe('ComputedUpdateOutboxPayload', () => {
     expect(deserialized.value.seedTableId.toString()).toBe(TABLE_ID);
     expect(deserialized.value.seedRecordIds[0].toString()).toBe(RECORD_ID);
     expect(deserialized.value.steps[0].fieldIds[0].toString()).toBe(FIELD_ID);
+    expect(deserialized.value.sameTableBatches).toHaveLength(1);
+    expect(
+      deserialized.value.sameTableBatches[0]?.steps.map((step) => ({
+        level: step.level,
+        fieldIds: step.fieldIds.map((fieldId) => fieldId.toString()),
+      }))
+    ).toEqual([
+      { level: 0, fieldIds: [FIELD_ID] },
+      { level: 1, fieldIds: [SECOND_FIELD_ID] },
+    ]);
     expect(deserialized.value.extraSeedRecords[0].tableId.toString()).toBe(EXTRA_TABLE_ID);
     expect(deserialized.value.extraSeedRecords[0].recordIds[0].toString()).toBe(EXTRA_RECORD_ID);
     expect(deserialized.value.edges[0]?.allTargetRecordsReasons).toEqual(['conditional_delete']);

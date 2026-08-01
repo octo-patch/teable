@@ -72,7 +72,8 @@ describe('SpaceController data DB admin gate', () => {
       dataDbPreflightService as never,
       dataDbBindingService as never,
       cls as never,
-      spaceDataDbMigrationService as never
+      spaceDataDbMigrationService as never,
+      {} as never
     );
   });
 

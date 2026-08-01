@@ -95,17 +95,6 @@
     "help": "詳細については、<HelpCenter /> をご覧ください",
     "helpCenter": "ヘルプセンター"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "関連付けできません：同じバッチ内で、このレコードはすでに別のレコードに関連付けられています。一対多の関係では、各子レコードは1つの親レコードにのみ属できます。",
-      "one_many_duplicate": "関連付けできません：このレコードはすでに別のレコードに関連付けられています。一対多の関係では、各子レコードは1つの親レコードにのみ属できます。",
-      "one_one_duplicate": "関連付けできません：対象レコードは一対一の関係ですでに別のレコードに関連付けられています。"
-    },
-    "field": {
-      "maxColumnLimit": "テーブル「{{tableName}}」には最大 {{maxFieldCount}} 個のフィールドしか作成できません。",
-      "requiredExistingValues": "既存のレコードに空の値があるため、フィールド「{{fieldName}}」を必須にできません。"
-    }
-  },
   "field": {
     "advancedProps": "高度なプロパティ",
     "hide": "非表示",
@@ -464,6 +453,11 @@
       "fillFailed": "入力失敗",
       "clearing": "クリア...",
       "clearSuccessful": "クリア成功",
+      "archiveRecordConfirmTitle": "レコードをアーカイブ",
+      "archiveRecordConfirmDescription": "この操作により {{recordCount}} 件のレコードがアーカイブされます。アーカイブされたレコードはテーブルのアーカイブから閲覧・復元できます。",
+      "archiveRecord": "アーカイブ",
+      "archiving": "アーカイブ中...",
+      "archiveSuccessful": "アーカイブに成功しました",
       "deleting": "削除中...",
       "deleteSuccessful": "削除成功",
       "deleteStream": {
@@ -819,6 +813,8 @@
     "insertRecordBelow": "レコードを下に挿入",
     "deleteRecord": "レコードを削除",
     "deleteAllSelectedRecords": "選択したすべてのレコードを削除",
+    "archiveRecord": "レコードをアーカイブ",
+    "archiveAllSelectedRecords": "選択したすべてのレコードをアーカイブ",
     "editField": "フィールドを編集",
     "insertFieldLeft": "左に挿入",
     "insertFieldRight": "右に挿入",
@@ -874,11 +870,49 @@
   },
   "lastModifiedTime": "最終更新日時",
   "lastModify": "最終更新: ",
+  "tableArchive": {
+    "title": "テーブルのアーカイブ",
+    "menuTitle": "アーカイブ",
+    "archivedTime": "アーカイブ日時",
+    "archivedBy": "アーカイブしたユーザー",
+    "recordDetail": "レコードの詳細",
+    "empty": "アーカイブされたレコードはありません",
+    "allCreators": "すべての作成者",
+    "filterArchivedTime": "アーカイブ日時",
+    "searchPlaceholder": "アーカイブされたレコードを検索",
+    "clearFilter": "フィルターをクリア",
+    "export": "CSV をエクスポート",
+    "exporting": "エクスポート中… {{count}} 行",
+    "exportSucceed": "エクスポート完了、ダウンロードを開始します",
+    "restoreSelected": "復元（{{count}}）",
+    "permanentDeleteSelected": "完全に削除（{{count}}）",
+    "permanentDeleteConfirm": "{{count}} 件のアーカイブ済みレコードを完全に削除しますか？この操作は元に戻せません。",
+    "permanentDeleteSucceed": "完全に削除しました",
+    "resetArchive": "アーカイブを空にする",
+    "resetArchiveConfirm": "このテーブルのすべてのアーカイブ済みレコードを削除しますか？この操作は元に戻せません。",
+    "resetSucceed": "アーカイブを空にしました",
+    "orderBy": {
+      "archivedTime": "アーカイブ日時で並べ替え",
+      "recordCreatedTime": "作成日時で並べ替え",
+      "recordLastModifiedTime": "最終更新日時で並べ替え"
+    }
+  },
   "tableTrash": {
     "title": "ゴミ箱",
     "resourceType": "タイプ",
     "deletedResource": "リソース",
-    "moreResources": "他 {{count}} 件"
+    "moreResources": "他 {{count}} 件",
+    "deletedTime": "削除日時",
+    "deletedBy": "削除したユーザー",
+    "filterAllTypes": "すべてのタイプ",
+    "filterAllUsers": "すべてのユーザー",
+    "filterDeletedTime": "削除日時",
+    "clearFilter": "フィルターをクリア",
+    "recordsDialogTitle": "削除されたレコード（{{count}}）",
+    "recordDetail": "レコードの詳細",
+    "filterAllCreators": "すべての作成者",
+    "filterCreatedTime": "作成日時",
+    "searchPlaceholder": "レコードを検索"
   },
   "baseShare": {
     "shareTitle": "共有",
@@ -908,7 +942,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "コピーとして保存可能",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "自分のスペースにコピーを保存できます",
+    "editRequiresLogin": "ログインするとレコードを編集できます",
     "enterPassword": "パスワードを入力",
     "allowCopyData": "閲覧者がデータをコピーすることを許可",
     "sharedNode": "共有ノード",

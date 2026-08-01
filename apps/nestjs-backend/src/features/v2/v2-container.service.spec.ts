@@ -6,9 +6,9 @@ import type { InstanceWrapper } from '@nestjs/core/injector/instance-wrapper';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { PgPoolRegistry } from '@teable/db-main-prisma';
 import { v2DataDbTokens, v2MetaDbTokens } from '@teable/v2-adapter-db-postgres-pg';
+import type { IV2NodePgContainerOptions } from '@teable/v2-container-node';
 import { v2CoreTokens } from '@teable/v2-core';
 import type { DependencyContainer } from '@teable/v2-di';
-import type { IV2NodePgContainerOptions } from '@teable/v2-container-node';
 import { PinoLogger } from 'nestjs-pino';
 import type { Pool } from 'pg';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -447,7 +447,14 @@ describe('V2ContainerService', () => {
           taskWorkerConfig: expect.objectContaining({
             enabled: true,
             allowManualIndexExecution: false,
-            allowedKinds: ['rebuild_search_vector', 'manual_investigation'],
+            // rebuild_search_access_path is what schema-change maintenance
+            // enqueues; the worker must claim it or search silently degrades
+            // to ILIKE after any field change.
+            allowedKinds: [
+              'rebuild_search_access_path',
+              'rebuild_search_vector',
+              'manual_investigation',
+            ],
           }),
         }),
       })

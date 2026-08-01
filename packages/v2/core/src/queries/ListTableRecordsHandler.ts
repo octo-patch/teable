@@ -9,6 +9,7 @@ import {
   resolveOrderBy as resolveQueryOrderBy,
 } from '../commands/shared/orderBy';
 import { domainError, isNotFoundError, type DomainError } from '../domain/shared/DomainError';
+import { composeAndSpecsOrUndefined } from '../domain/shared/specification/composeAndSpecs';
 import { type ISpecification } from '../domain/shared/specification/ISpecification';
 import { FieldId } from '../domain/table/fields/FieldId';
 import { FieldKeyType } from '../domain/table/fields/FieldKeyType';
@@ -20,7 +21,7 @@ import { IncomingLinkSelectedSpec } from '../domain/table/records/specs/Incoming
 import type { ITableRecordConditionSpecVisitor } from '../domain/table/records/specs/ITableRecordConditionSpecVisitor';
 import { RecordByIdsSpec } from '../domain/table/records/specs/RecordByIdsSpec';
 import { RecordConditionSpecBuilder } from '../domain/table/records/specs/RecordConditionSpecBuilder';
-import type { TableRecord } from '../domain/table/records/TableRecord';
+import { TableRecord } from '../domain/table/records/TableRecord';
 import { TableByIdSpec } from '../domain/table/specs/TableByIdSpec';
 import { TableByIncomingReferenceToTableSpec } from '../domain/table/specs/TableByIncomingReferenceToTableSpec';
 import type { Table } from '../domain/table/Table';
@@ -28,6 +29,7 @@ import type { ViewQueryGroupItem } from '../domain/table/views/ViewQueryDefaults
 import { NoopTableQueryObservability } from '../ports/defaults/NoopTableQueryObservability';
 import type { IExecutionContext } from '../ports/ExecutionContext';
 import * as LoggerPort from '../ports/Logger';
+import type { RecordQueryFieldMask } from '../ports/RecordQueryPlugin';
 import { ITableQueryObservability } from '../ports/TableQueryObservability';
 import type { TableQueryObservabilityEvent } from '../ports/TableQueryObservability';
 import {
@@ -38,6 +40,7 @@ import {
   type TableSearchScope,
 } from '../ports/TableQueryTraceAttributes';
 import * as TableRecordQueryRepositoryPort from '../ports/TableRecordQueryRepository';
+import type { ITableRecordGroup } from '../ports/TableRecordQueryRepository';
 import type { TableRecordReadModel } from '../ports/TableRecordReadModel';
 import * as TableRepositoryPort from '../ports/TableRepository';
 import { v2CoreTokens } from '../ports/tokens';
@@ -64,16 +67,20 @@ export class ListTableRecordsResult {
     readonly records: ReadonlyArray<TableRecordReadModel>,
     readonly total: number,
     readonly offset: number,
-    readonly limit: number
+    readonly limit: number,
+    readonly groups?: ReadonlyArray<ITableRecordGroup>,
+    readonly searchMatches?: ReadonlyArray<TableRecordQueryRepositoryPort.ITableRecordSearchMatch>
   ) {}
 
   static create(
     records: ReadonlyArray<TableRecordReadModel>,
     total: number,
     offset: number,
-    limit: number
+    limit: number,
+    groups?: ReadonlyArray<ITableRecordGroup>,
+    searchMatches?: ReadonlyArray<TableRecordQueryRepositoryPort.ITableRecordSearchMatch>
   ): ListTableRecordsResult {
-    return new ListTableRecordsResult(records, total, offset, limit);
+    return new ListTableRecordsResult(records, total, offset, limit, groups, searchMatches);
   }
 }
 
@@ -174,45 +181,298 @@ function resolveFilterNodeFieldKeys(
 }
 
 const getEnabledFieldIdSet = (query: ListTableRecordsQuery): ReadonlySet<string> | undefined => {
+  // Prefer pure-V2 query scope field allow-list over legacy CTE enabledFieldIds.
+  if (query.queryScope?.readableFieldIds != null) {
+    return query.queryScope.readableFieldIds;
+  }
   const enabledFieldIds = query.recordReadQuerySource?.enabledFieldIds;
   return enabledFieldIds ? new Set(enabledFieldIds) : undefined;
 };
 
-const sanitizeFilterByEnabledFieldIds = (
-  filter: RecordFilter | undefined,
-  enabledFieldIds: ReadonlySet<string> | undefined
-): RecordFilter | undefined => {
-  if (!filter || enabledFieldIds == null) {
-    return filter;
+/**
+ * Collect field ids referenced by a condition specification tree
+ * (left/right field of conditions + field-reference values).
+ * Used so mask evaluation can load dependency columns that are not returned.
+ */
+const collectFieldIdsFromSpec = (spec: unknown): ReadonlySet<string> => {
+  const ids = new Set<string>();
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    const candidate = node as {
+      leftSpec?: () => unknown;
+      rightSpec?: () => unknown;
+      innerSpec?: () => unknown;
+      field?: () => { id: () => { toString: () => string } };
+      value?: () => unknown;
+    };
+    if (typeof candidate.leftSpec === 'function' && typeof candidate.rightSpec === 'function') {
+      walk(candidate.leftSpec());
+      walk(candidate.rightSpec());
+      return;
+    }
+    if (typeof candidate.innerSpec === 'function') {
+      walk(candidate.innerSpec());
+      return;
+    }
+    if (typeof candidate.field === 'function') {
+      try {
+        ids.add(candidate.field().id().toString());
+      } catch {
+        // ignore non-field specs
+      }
+    }
+    if (typeof candidate.value === 'function') {
+      const value = candidate.value();
+      if (
+        value &&
+        typeof value === 'object' &&
+        typeof (value as { field?: unknown }).field === 'function'
+      ) {
+        try {
+          ids.add(
+            (value as { field: () => { id: () => { toString: () => string } } })
+              .field()
+              .id()
+              .toString()
+          );
+        } catch {
+          // ignore
+        }
+      }
+    }
+  };
+  walk(spec);
+  return ids;
+};
+
+const collectMaskDependencyFieldIds = (
+  fieldMasks: ReadonlyArray<RecordQueryFieldMask> | undefined
+): ReadonlySet<string> => {
+  const ids = new Set<string>();
+  for (const mask of fieldMasks ?? []) {
+    for (const fieldId of collectFieldIdsFromSpec(mask.visibleWhen)) {
+      ids.add(fieldId);
+    }
+  }
+  return ids;
+};
+
+/**
+ * Apply conditional field masks (visibleWhen) after read.
+ * Fields that fail the mask are omitted from the result payload (null-out).
+ *
+ * Fail-closed: if a mask dependency field was not loaded into the evaluation
+ * projection, the masked field is stripped (never fail-open on missing deps).
+ */
+const applyFieldMasksToRecords = (
+  table: Table,
+  records: ReadonlyArray<TableRecordReadModel>,
+  fieldMasks: ReadonlyArray<RecordQueryFieldMask> | undefined,
+  evaluationFieldIds?: ReadonlySet<string>
+): ReadonlyArray<TableRecordReadModel> => {
+  if (!fieldMasks?.length || !records.length) {
+    return records;
   }
 
-  const sanitizeNode = (node: RecordFilterNode): RecordFilterNode | undefined => {
+  const maskDepsByFieldId = new Map(
+    fieldMasks.map((mask) => [mask.fieldId, collectFieldIdsFromSpec(mask.visibleWhen)] as const)
+  );
+
+  return records.map((record) => {
+    const domainRecordResult = TableRecord.fromRawFieldValues({
+      id: record.id,
+      tableId: table.id(),
+      fields: record.fields,
+    });
+    // Fail-closed: if we cannot evaluate masks, strip all masked fields.
+    if (domainRecordResult.isErr()) {
+      const nextFields = { ...record.fields };
+      for (const mask of fieldMasks) {
+        delete nextFields[mask.fieldId];
+      }
+      return { ...record, fields: nextFields };
+    }
+    const domainRecord = domainRecordResult.value;
+    let changed = false;
+    const nextFields = { ...record.fields };
+    for (const mask of fieldMasks) {
+      if (!Object.prototype.hasOwnProperty.call(nextFields, mask.fieldId)) {
+        continue;
+      }
+      const deps = maskDepsByFieldId.get(mask.fieldId);
+      // Fail-closed when a dependency was never loaded into the evaluation
+      // projection. (isEmpty/isNot on undefined fail-open — do not evaluate.)
+      // Null values that were projected still evaluate normally.
+      const missingFromProjection =
+        evaluationFieldIds != null &&
+        deps != null &&
+        [...deps].some((depId) => !evaluationFieldIds.has(depId));
+      if (missingFromProjection) {
+        delete nextFields[mask.fieldId];
+        changed = true;
+        continue;
+      }
+      if (!mask.visibleWhen.isSatisfiedBy(domainRecord)) {
+        delete nextFields[mask.fieldId];
+        changed = true;
+      }
+    }
+    return changed ? { ...record, fields: nextFields } : record;
+  });
+};
+
+type UnreadableFilterFieldPolicy = 'reject' | 'strip';
+
+/**
+ * Apply the static readable-field allow-list to a filter.
+ *
+ * Explicit client filters reject unreadable fields so the query cannot silently
+ * broaden. Persisted view defaults strip stale unreadable fields so permission
+ * changes do not make the view unusable.
+ */
+const sanitizeFilterByEnabledFieldIds = (
+  filter: RecordFilter | undefined,
+  enabledFieldIds: ReadonlySet<string> | undefined,
+  maskedFieldIds: ReadonlySet<string> | undefined,
+  unreadableFieldPolicy: UnreadableFilterFieldPolicy
+): Result<RecordFilter | undefined, DomainError> => {
+  if (!filter || (enabledFieldIds == null && maskedFieldIds == null)) {
+    return ok(filter);
+  }
+
+  const unreadableFieldResult = (): Result<undefined, DomainError> =>
+    unreadableFieldPolicy === 'reject'
+      ? err(
+          domainError.validation({
+            code: 'record.filter.unreadable_field',
+            message: 'Filter references a field that is not readable',
+          })
+        )
+      : ok(undefined);
+
+  const sanitizeNode = (
+    node: RecordFilterNode
+  ): Result<RecordFilterNode | undefined, DomainError> => {
     if (isRecordFilterCondition(node)) {
-      return enabledFieldIds.has(node.fieldId) ? node : undefined;
+      if (enabledFieldIds != null && !enabledFieldIds.has(node.fieldId)) {
+        return unreadableFieldResult();
+      }
+      if (isRecordFilterFieldReferenceValue(node.value)) {
+        if (enabledFieldIds != null && !enabledFieldIds.has(node.value.fieldId)) {
+          return unreadableFieldResult();
+        }
+        if (maskedFieldIds?.has(node.value.fieldId)) {
+          return err(
+            domainError.validation({
+              code: 'record.filter.masked_field_reference',
+              message:
+                'Filter field reference to a conditionally masked field is not allowed until mask-aware SQL is available',
+            })
+          );
+        }
+        // LHS masked + field-ref RHS: NULL truth is row-dependent — fail closed.
+        if (maskedFieldIds?.has(node.fieldId)) {
+          return err(
+            domainError.validation({
+              code: 'record.filter.masked_field_reference_lhs',
+              message:
+                'Filter comparing a conditionally masked field to another field is not allowed until mask-aware SQL CASE WHEN is available',
+            })
+          );
+        }
+      }
+      return ok(node);
     }
 
     if (isRecordFilterGroup(node)) {
-      const items = node.items
-        .map((item) => sanitizeNode(item))
-        .filter((item): item is RecordFilterNode => item != null);
-
-      return items.length
-        ? {
-            conjunction: node.conjunction,
-            items,
-          }
-        : undefined;
+      const items: RecordFilterNode[] = [];
+      for (const item of node.items) {
+        const next = sanitizeNode(item);
+        if (next.isErr()) return err(next.error);
+        if (next.value != null) items.push(next.value);
+      }
+      return ok(
+        items.length
+          ? {
+              conjunction: node.conjunction,
+              items,
+            }
+          : undefined
+      );
     }
 
     if (isRecordFilterNot(node)) {
-      const nextNode = sanitizeNode(node.not);
-      return nextNode ? { not: nextNode } : undefined;
+      return sanitizeNode(node.not).map((nextNode) => (nextNode ? { not: nextNode } : undefined));
     }
 
-    return node;
+    return ok(node);
   };
 
   return sanitizeNode(filter);
+};
+
+/** Static allow-list for server-owned view defaults only. */
+const filterSortByEnabledFieldIds = (
+  sort: ReadonlyArray<RecordSortValue> | undefined,
+  enabledFieldIds: ReadonlySet<string> | undefined
+): ReadonlyArray<RecordSortValue> | undefined => {
+  if (!sort?.length || enabledFieldIds == null) {
+    return sort;
+  }
+  const filtered = sort.filter((item) => enabledFieldIds.has(item.fieldId));
+  return filtered.length ? filtered : undefined;
+};
+
+const filterGroupByEnabledFieldIds = (
+  group: ReadonlyArray<ViewQueryGroupItem> | undefined,
+  enabledFieldIds: ReadonlySet<string> | undefined
+): ReadonlyArray<ViewQueryGroupItem> | undefined => {
+  if (!group?.length || enabledFieldIds == null) {
+    return group;
+  }
+  const filtered = group.filter((item) => enabledFieldIds.has(item.fieldId));
+  return filtered.length ? filtered : undefined;
+};
+
+const rejectUnreadableSortOrGroup = (
+  kind: 'sort' | 'group',
+  items: ReadonlyArray<{ fieldId: string }> | undefined,
+  enabledFieldIds: ReadonlySet<string> | undefined
+): Result<void, DomainError> => {
+  if (!items?.length || enabledFieldIds == null) {
+    return ok(undefined);
+  }
+  if (!items.some((item) => !enabledFieldIds.has(item.fieldId))) {
+    return ok(undefined);
+  }
+  return err(
+    domainError.validation({
+      code: `record.${kind}.unreadable_field`,
+      message: `${kind === 'sort' ? 'Sort' : 'Group'} references a field that is not readable`,
+    })
+  );
+};
+
+const rejectMaskedSortOrGroup = (
+  kind: 'sort' | 'group',
+  items: ReadonlyArray<{ fieldId: string }> | undefined,
+  maskedFieldIds: ReadonlySet<string> | undefined
+): Result<void, DomainError> => {
+  if (!items?.length || !maskedFieldIds?.size) {
+    return ok(undefined);
+  }
+  const masked = items.find((item) => maskedFieldIds.has(item.fieldId));
+  if (!masked) {
+    return ok(undefined);
+  }
+  return err(
+    domainError.validation({
+      code: `record.${kind}.masked_field`,
+      message: `${kind === 'sort' ? 'Sort' : 'Group'} on a conditionally masked field is not allowed until mask-aware SQL CASE WHEN is available`,
+    })
+  );
 };
 
 const nowMs = () => Date.now();
@@ -452,8 +712,21 @@ const resolveProjectionFieldIds = (
   fieldKeyType: FieldKeyType,
   enabledFieldIds?: ReadonlySet<string>
 ): Result<ReadonlyArray<FieldId> | undefined, DomainError> => {
+  // undefined projection + unrestricted → all columns (repo default).
+  // undefined projection + allow-list → only allow-list (empty set → []).
+  // Never treat empty allow-list as unrestricted.
   if (projection === undefined) {
-    return ok(undefined);
+    if (enabledFieldIds == null) {
+      return ok(undefined);
+    }
+    const fieldIds: FieldId[] = [];
+    for (const fieldIdText of enabledFieldIds) {
+      const fieldId = FieldId.create(fieldIdText);
+      if (fieldId.isOk()) {
+        fieldIds.push(fieldId.value);
+      }
+    }
+    return ok(fieldIds);
   }
 
   const fieldIds: FieldId[] = [];
@@ -463,7 +736,7 @@ const resolveProjectionFieldIds = (
     if (resolvedFieldId.isErr()) {
       return err(resolvedFieldId.error);
     }
-    if (enabledFieldIds && !enabledFieldIds.has(resolvedFieldId.value)) {
+    if (enabledFieldIds != null && !enabledFieldIds.has(resolvedFieldId.value)) {
       continue;
     }
     if (seen.has(resolvedFieldId.value)) {
@@ -571,12 +844,7 @@ export class ListTableRecordsHandler
               }
               // silently ignore if the view no longer exists
             }
-            const resolvedSort = yield* resolveSortValues(
-              table,
-              query.sort,
-              query.fieldKeyType,
-              enabledFieldIds
-            );
+            const resolvedSort = yield* resolveSortValues(table, query.sort, query.fieldKeyType);
             const effectiveQueryDefaults = effectiveView
               ? yield* effectiveView.queryDefaults()
               : undefined;
@@ -586,16 +854,82 @@ export class ListTableRecordsHandler
               context.actorId.toString()
             );
             const sanitizedDefaultFilter = yield* sanitizeRecordFilter(table, defaultFilter);
-            effectiveFilter = sanitizeFilterByEnabledFieldIds(
-              mergeFilterWithViewDefaults(sanitizedDefaultFilter, actorResolvedFilter),
+            // Conditionally masked fields: reject sort/group/search + RHS filter
+            // refs until SQL CASE WHEN (never silent drop). LHS filter uses
+            // three-valued mask rewrite in buildRecordConditionSpec.
+            const maskedFieldIds = query.queryScope?.fieldMasks?.length
+              ? new Set(query.queryScope.fieldMasks.map((mask) => mask.fieldId))
+              : undefined;
+            const permissionSanitizedDefaultFilter = yield* sanitizeFilterByEnabledFieldIds(
+              sanitizedDefaultFilter,
+              enabledFieldIds,
+              maskedFieldIds,
+              'strip'
+            );
+            const permissionValidatedClientFilter = yield* sanitizeFilterByEnabledFieldIds(
+              actorResolvedFilter,
+              enabledFieldIds,
+              maskedFieldIds,
+              'reject'
+            );
+            effectiveFilter = mergeFilterWithViewDefaults(
+              permissionSanitizedDefaultFilter,
+              permissionValidatedClientFilter
+            );
+            // Resolve groupBy to field IDs (same path as sort) before masked
+            // reject / subtraction — raw keys may be name/dbFieldName.
+            const resolvedGroupFieldIds: string[] = [];
+            for (const groupKey of query.groupBy ?? []) {
+              const groupFieldId = yield* FieldKeyResolverService.resolveFieldKey(
+                table,
+                groupKey,
+                query.fieldKeyType
+              );
+              resolvedGroupFieldIds.push(groupFieldId);
+            }
+            const clientGroupFieldIds = new Set(resolvedGroupFieldIds);
+            // Group first so pure groupBy is not mislabeled as sort (OpenAPI
+            // merges groupBy into sort before calling list).
+            yield* rejectUnreadableSortOrGroup(
+              'group',
+              resolvedGroupFieldIds.map((fieldId) => ({ fieldId })),
               enabledFieldIds
             );
-            effectiveSort = mergeSortWithViewDefaults(
+            yield* rejectMaskedSortOrGroup(
+              'group',
+              resolvedGroupFieldIds.map((fieldId) => ({ fieldId })),
+              maskedFieldIds
+            );
+            // Sort-only keys: exclude groupBy fields that were folded into sort.
+            const clientSortOnly = resolvedSort?.filter(
+              (item) => !clientGroupFieldIds.has(item.fieldId)
+            );
+            yield* rejectUnreadableSortOrGroup('sort', clientSortOnly, enabledFieldIds);
+            yield* rejectMaskedSortOrGroup('sort', clientSortOnly, maskedFieldIds);
+            // View-default sort/group may still mention masked fields — strip only
+            // those defaults (not client-provided keys, which were rejected above).
+            const viewDefaultSort = mergeSortWithViewDefaults(
               effectiveQueryDefaults?.sort(),
               effectiveQueryDefaults?.manualSort(),
-              resolvedSort
+              undefined
+            )?.filter((item) => !maskedFieldIds?.has(item.fieldId));
+            effectiveSort = filterSortByEnabledFieldIds(
+              mergeSortWithViewDefaults(viewDefaultSort, undefined, resolvedSort),
+              enabledFieldIds
             );
-            effectiveGroup = query.groupBy?.length ? undefined : effectiveQueryDefaults?.group();
+            effectiveGroup = filterGroupByEnabledFieldIds(
+              query.groupBy?.length
+                ? resolvedGroupFieldIds.map((fieldId) => ({
+                    fieldId,
+                    order:
+                      resolvedSort?.find((item) => item.fieldId === fieldId)?.order ??
+                      ('asc' as const),
+                  }))
+                : effectiveQueryDefaults
+                    ?.group()
+                    ?.filter((item) => !maskedFieldIds?.has(item.fieldId)),
+              enabledFieldIds
+            );
             orderBy = mergeOrderBy(
               yield* resolveGroupByToOrderBy(effectiveGroup),
               yield* resolveQueryOrderBy(effectiveSort),
@@ -608,13 +942,51 @@ export class ListTableRecordsHandler
               effectiveFilter,
               linkCandidatePlan
             );
-            queryPlan = builtQueryPlan;
+            // AND pure-V2 permission row scope into the condition tree
+            // (unless link-selected keepPrimary / skipRecordSpec).
+            const rowScopeSpec =
+              query.queryScope?.skipRecordSpec || !query.queryScope?.recordSpec
+                ? undefined
+                : query.queryScope.recordSpec;
+            queryPlan = {
+              ...builtQueryPlan,
+              spec: composeAndSpecsOrUndefined(
+                [builtQueryPlan.spec, rowScopeSpec].filter(
+                  (spec): spec is ISpecification<TableRecord, ITableRecordConditionSpecVisitor> =>
+                    spec != null
+                )
+              ),
+            };
             projectionFieldIds = yield* resolveProjectionFieldIds(
               table,
               query.projection,
               query.fieldKeyType,
               enabledFieldIds
             );
+            // Expand projection with static readable fields + mask dependency
+            // fields so visibleWhen evaluation is not fail-open on missing columns.
+            // Dependencies are never returned — stripped after mask apply.
+            if (query.queryScope?.fieldMasks?.length) {
+              const maskDeps = collectMaskDependencyFieldIds(query.queryScope.fieldMasks);
+              // No projection + no allow-list means "all columns" — seed with
+              // every table field so expansion cannot collapse to mask deps.
+              const baseFieldIds =
+                projectionFieldIds == null && enabledFieldIds == null
+                  ? table.fieldIds().map((id) => id.toString())
+                  : [
+                      ...(projectionFieldIds?.map((id) => id.toString()) ?? []),
+                      ...(enabledFieldIds ?? []),
+                    ];
+              const expanded = new Set([...baseFieldIds, ...maskDeps]);
+              const expandedIds: FieldId[] = [];
+              for (const fieldIdText of expanded) {
+                const fieldId = FieldId.create(fieldIdText);
+                if (fieldId.isOk()) {
+                  expandedIds.push(fieldId.value);
+                }
+              }
+              projectionFieldIds = expandedIds;
+            }
             observabilityEvent = createListRecordsObservabilityEvent(query, {
               hasFilter: Boolean(effectiveFilter),
               hasSort: Boolean(effectiveSort?.length),
@@ -632,17 +1004,47 @@ export class ListTableRecordsHandler
             resolveShapeSpan?.end();
           }
 
-          // 3. Resolve visible-row search through the repository
-          const searchVisibleFieldIds =
+          // 3. Resolve visible-row search through the repository.
+          // Conditionally masked fields: reject when the client targets them
+          // explicitly (id / name / dbFieldName via RecordSearch resolver);
+          // for all-fields search, exclude them from the search set.
+          const searchMaskedFieldIds = query.queryScope?.fieldMasks?.length
+            ? new Set(query.queryScope.fieldMasks.map((mask) => mask.fieldId))
+            : undefined;
+          const requestedSearch = RecordSearch.fromOptionalTuple(query.search);
+          if (
+            requestedSearch &&
+            searchMaskedFieldIds?.size &&
+            !requestedSearch.searchesAllFields()
+          ) {
+            for (const key of requestedSearch.fieldKeys() ?? []) {
+              const resolved = RecordSearch.resolveFieldKey(table, key);
+              if (resolved.isOk() && searchMaskedFieldIds.has(resolved.value.id().toString())) {
+                yield* err(
+                  domainError.validation({
+                    code: 'record.search.masked_field',
+                    message:
+                      'Search on a conditionally masked field is not allowed until mask-aware SQL is available',
+                  })
+                );
+              }
+            }
+          }
+          const searchVisibleFieldIds = filterFieldIdsByEnabledFieldIds(
             query.viewId && !query.ignoreViewQuery
-              ? filterFieldIdsByEnabledFieldIds(
-                  yield* table.getOrderedVisibleFieldIds(query.viewId),
-                  enabledFieldIds
+              ? yield* table.getOrderedVisibleFieldIds(query.viewId)
+              : table.fieldIds(),
+            enabledFieldIds
+          ).filter((fieldId) => !searchMaskedFieldIds?.has(fieldId.toString()));
+          const projectedSearchVisibleFieldIds =
+            query.includeSearchFieldMatches && projectionFieldIds
+              ? searchVisibleFieldIds.filter((fieldId) =>
+                  projectionFieldIds.some((projectedFieldId) => projectedFieldId.equals(fieldId))
                 )
-              : filterFieldIdsByEnabledFieldIds(table.fieldIds(), enabledFieldIds);
+              : searchVisibleFieldIds;
           const visibleRowSearch = resolveVisibleRowSearch(
-            RecordSearch.fromOptionalTuple(query.search),
-            searchVisibleFieldIds
+            requestedSearch,
+            projectedSearchVisibleFieldIds
           );
           const searchAccessEvent = createListRecordsObservabilityEvent(query, {
             hasFilter: Boolean(effectiveFilter),
@@ -678,6 +1080,16 @@ export class ListTableRecordsHandler
                 includeTotal: query.includeTotal,
                 recordReadQuerySource: query.recordReadQuerySource,
                 searchAccessPath: query.recordSearchAccessPath,
+                includeSearchFieldMatches: query.includeSearchFieldMatches,
+                searchIndexMode: query.searchIndexMode,
+                ...(query.includeGroupMetadata && effectiveGroup?.length
+                  ? {
+                      groupBy: ((yield* resolveGroupByToOrderBy(effectiveGroup!)) ?? []).filter(
+                        TableRecordQueryRepositoryPort.isFieldOrderBy
+                      ),
+                      groupLimit: query.groupLimit,
+                    }
+                  : {}),
               }
             );
             if (queryRecordsResult.isOk()) {
@@ -698,10 +1110,58 @@ export class ListTableRecordsHandler
           }
           const queryResult = yield* queryRecordsResult;
 
-          // 5. Transform response field keys if needed
+          // 5. Apply field masks, strip to requested projection, then remap keys
+          const requestedProjection =
+            query.projection === undefined
+              ? undefined
+              : new Set(
+                  (yield* resolveProjectionFieldIds(
+                    table,
+                    query.projection,
+                    query.fieldKeyType,
+                    enabledFieldIds
+                  ))?.map((id) => id.toString()) ?? []
+                );
+          // Field ids available for mask evaluation (readable + deps). Used for
+          // fail-closed checks when a dependency was not projected.
+          const evaluationFieldIds = projectionFieldIds
+            ? new Set(projectionFieldIds.map((id) => id.toString()))
+            : enabledFieldIds
+              ? new Set(enabledFieldIds)
+              : undefined;
+          let maskedRecords = applyFieldMasksToRecords(
+            table,
+            queryResult.records,
+            query.queryScope?.fieldMasks,
+            evaluationFieldIds
+          );
+          // Strip mask dependency fields that were only loaded for evaluation.
+          if (requestedProjection) {
+            maskedRecords = maskedRecords.map((record) => {
+              const nextFields: Record<string, unknown> = {};
+              for (const [fieldId, value] of Object.entries(record.fields)) {
+                if (requestedProjection.has(fieldId)) {
+                  nextFields[fieldId] = value;
+                }
+              }
+              return { ...record, fields: nextFields };
+            });
+          } else if (enabledFieldIds != null) {
+            // No explicit client projection: return only allow-listed fields
+            // (never leak internal mask dependency columns).
+            maskedRecords = maskedRecords.map((record) => {
+              const nextFields: Record<string, unknown> = {};
+              for (const [fieldId, value] of Object.entries(record.fields)) {
+                if (enabledFieldIds.has(fieldId)) {
+                  nextFields[fieldId] = value;
+                }
+              }
+              return { ...record, fields: nextFields };
+            });
+          }
           const transformedRecords =
             query.fieldKeyType !== FieldKeyType.Id
-              ? queryResult.records.map((record) => ({
+              ? maskedRecords.map((record) => ({
                   ...record,
                   fields: FieldKeyResolverService.transformResponseKeys(
                     table,
@@ -709,7 +1169,7 @@ export class ListTableRecordsHandler
                     query.fieldKeyType
                   ),
                 }))
-              : queryResult.records;
+              : maskedRecords;
 
           logger.debug('ListTableRecordsHandler.success', {
             count: queryResult.records.length,
@@ -740,7 +1200,9 @@ export class ListTableRecordsHandler
               transformedRecords,
               queryResult.total,
               query.pagination.offset().toNumber(),
-              query.pagination.limit().toNumber()
+              query.pagination.limit().toNumber(),
+              queryResult.groups,
+              queryResult.searchMatches
             )
           );
         }.bind(this)
@@ -800,7 +1262,9 @@ export class ListTableRecordsHandler
         let recordIdsOrder: ReadonlyArray<RecordId> | undefined;
 
         if (resolvedFilter) {
-          builder.addConditionSpec(yield* buildRecordConditionSpec(table, resolvedFilter));
+          builder.addConditionSpec(
+            yield* buildRecordConditionSpec(table, resolvedFilter, query.queryScope?.fieldMasks)
+          );
           hasSpec = true;
         }
 

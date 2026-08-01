@@ -130,6 +130,7 @@ export class RecordOpenApiController {
     return await this.recordService.getRecords(tableId, query, true);
   }
 
+  @UseV2Feature('getRecords')
   @Permissions('record|read')
   @Get(':recordId')
   async getRecord(
@@ -137,6 +138,9 @@ export class RecordOpenApiController {
     @Param('recordId') recordId: string,
     @Query(new ZodValidationPipe(getRecordQuerySchema)) query: IGetRecordQuery
   ): Promise<IRecord> {
+    if (this.cls.get('useV2')) {
+      return this.recordOpenApiV2Service.getRecord(tableId, recordId, query);
+    }
     return await this.recordService.getRecord(tableId, recordId, query, true, true);
   }
 
@@ -363,13 +367,18 @@ export class RecordOpenApiController {
     return await this.recordOpenApiService.deleteRecords(tableId, query.recordIds, windowId);
   }
 
+  @UseV2Feature('getRecords')
   @Permissions('record|read')
-  @Get('/socket/snapshot-bulk')
+  @Post('/socket/snapshot-bulk')
   async getSnapshotBulk(
     @Param('tableId') tableId: string,
-    @Query('ids') ids: string[],
-    @Query('projection') projection?: { [fieldNameOrId: string]: boolean }
+    @Body('ids') ids: string[],
+    @Body('projection') projection?: { [fieldNameOrId: string]: boolean }
   ) {
+    if (this.cls.get('useV2')) {
+      return this.recordOpenApiV2Service.getSocketSnapshotBulk(tableId, ids, projection);
+    }
+
     return this.recordService.getSnapshotBulkWithPermission(
       tableId,
       ids,
@@ -380,16 +389,27 @@ export class RecordOpenApiController {
     );
   }
 
+  @UseV2Feature('getRecords')
   @Permissions('record|read')
   @Post('/socket/doc-ids')
   async getDocIds(
     @Param('tableId') tableId: string,
     @Body(new ZodValidationPipe(getRecordsRoSchema), TqlPipe) query: IGetRecordsRo
   ) {
+    if (this.cls.get('useV2')) {
+      return this.getDocIdsWithCache(tableId, query, () =>
+        this.recordOpenApiV2Service.getSocketDocIds(tableId, query)
+      );
+    }
+
     return this.getDocIdsWithCache(tableId, query);
   }
 
-  private async getDocIdsWithCache(tableId: string, query: IGetRecordsRo) {
+  private async getDocIdsWithCache(
+    tableId: string,
+    query: IGetRecordsRo,
+    load?: () => ReturnType<RecordOpenApiV2Service['getSocketDocIds']>
+  ) {
     const table = await this.prismaService.tableMeta.findUniqueOrThrow({
       where: {
         id: tableId,
@@ -424,9 +444,7 @@ export class RecordOpenApiController {
     );
     return this.performanceCacheService.wrap(
       cacheKey,
-      () => {
-        return this.recordService.getDocIdsByQuery(tableId, cacheQuery, true);
-      },
+      load ?? (() => this.recordService.getDocIdsByQuery(tableId, cacheQuery, true)),
       {
         ttl: 60 * 60, // 1 hour
       }
@@ -463,6 +481,7 @@ export class RecordOpenApiController {
   }
 
   @Permissions('record|read')
+  @UseV2Feature('buttonClick')
   @Post(':recordId/:fieldId/button-click')
   async buttonClick(
     @Req() req: Express.Request,
@@ -470,11 +489,15 @@ export class RecordOpenApiController {
     @Param('recordId') recordId: string,
     @Param('fieldId') fieldId: string
   ): Promise<IButtonClickVo> {
+    if (this.cls.get('useV2')) {
+      return this.recordOpenApiV2Service.buttonClick(tableId, recordId, fieldId);
+    }
     const result = await this.recordOpenApiService.buttonClick(tableId, recordId, fieldId);
     return { ...result, runId: '' };
   }
 
   @Permissions('record|update')
+  @UseV2Feature('buttonReset')
   @Post(':recordId/:fieldId/button-reset')
   async buttonReset(
     @Param('tableId') tableId: string,
@@ -490,6 +513,9 @@ export class RecordOpenApiController {
       },
     });
 
+    if (this.cls.get('useV2')) {
+      return this.recordOpenApiV2Service.buttonReset(tableId, recordId, fieldId);
+    }
     return await this.recordOpenApiService.resetButton(tableId, recordId, fieldId);
   }
 }

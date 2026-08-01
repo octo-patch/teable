@@ -12,7 +12,12 @@ import {
 } from '../../commands/shared/orderBy';
 import { ensureRecordIdsWithinScope } from '../../commands/shared/recordWriteScope';
 import { resolveDeleteStreamBatchSize } from '../../commands/shared/streamBatchSize';
-import { domainError, isNotFoundError, type DomainError } from '../../domain/shared/DomainError';
+import {
+  domainError,
+  isNotFoundError,
+  type DomainError,
+  type IDomainErrorLocalization,
+} from '../../domain/shared/DomainError';
 import type { IDomainEvent } from '../../domain/shared/DomainEvent';
 import { generateUuid } from '../../domain/shared/IdGenerator';
 import { OffsetPagination } from '../../domain/shared/pagination/OffsetPagination';
@@ -36,12 +41,11 @@ import * as EventBusPort from '../../ports/EventBus';
 import type { IExecutionContext } from '../../ports/ExecutionContext';
 import { AsyncIterableQueue } from '../../ports/memory/AsyncIterableQueue';
 import { RecordWriteOperationKind } from '../../ports/RecordWritePlugin';
-import type {
-  ITableRecordQueryRepository,
-  TableRecordOrderBy,
-} from '../../ports/TableRecordQueryRepository';
+import { ITableRecordQueryRepository } from '../../ports/TableRecordQueryRepository';
+import type { TableRecordOrderBy } from '../../ports/TableRecordQueryRepository';
 import type { TableRecordReadModel } from '../../ports/TableRecordReadModel';
-import type { DeleteManyResult, ITableRecordRepository } from '../../ports/TableRecordRepository';
+import { ITableRecordRepository } from '../../ports/TableRecordRepository';
+import type { DeleteManyResult } from '../../ports/TableRecordRepository';
 import { v2CoreTokens } from '../../ports/tokens';
 import type { SpanAttributes } from '../../ports/Tracer';
 import * as UnitOfWorkPort from '../../ports/UnitOfWork';
@@ -168,6 +172,7 @@ export interface DeleteByRangeStreamErrorEvent {
   recordIds: string[];
   message: string;
   code?: string;
+  localization?: IDomainErrorLocalization;
 }
 
 export type DeleteByRangeStreamEvent =
@@ -1713,13 +1718,14 @@ export class DeleteByRangeApplicationService {
 
   private createErrorEvent(
     error: DomainError,
-    details: Omit<DeleteByRangeStreamErrorEvent, 'id' | 'message' | 'code'>
+    details: Omit<DeleteByRangeStreamErrorEvent, 'id' | 'message' | 'code' | 'localization'>
   ): DeleteByRangeStreamErrorEvent {
     return {
       id: 'error',
       ...details,
       code: error.code,
       message: error.message,
+      ...(error.localization && { localization: error.localization }),
     };
   }
 

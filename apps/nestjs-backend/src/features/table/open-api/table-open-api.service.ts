@@ -514,7 +514,18 @@ export class TableOpenApiService {
           target: `table ${table.id}`,
         });
       }
-      await this.tableMutationCacheInvalidator.invalidateDroppedTable(table.dbTableName);
+      try {
+        await this.tableMutationCacheInvalidator.invalidateDroppedTable(table.dbTableName);
+      } catch (error) {
+        handleBestEffortDataDbDropError({
+          error,
+          isMetaFallback: await this.databaseRouter.isMetaFallbackForBase(table.baseId, {
+            useTransaction: true,
+          }),
+          logger: this.logger,
+          target: `mutation cache for table ${table.id}`,
+        });
+      }
     }
   }
 
@@ -734,7 +745,7 @@ export class TableOpenApiService {
     });
   }
 
-  async updateIcon(baseId: string, tableId: string, icon: string) {
+  async updateIcon(baseId: string, tableId: string, icon: string | null) {
     await this.prismaService.$tx(async () => {
       await this.tableService.updateTable(baseId, tableId, { icon });
     });

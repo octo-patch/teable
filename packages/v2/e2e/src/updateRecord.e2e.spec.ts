@@ -250,6 +250,80 @@ describe('v2 http updateRecord (e2e)', () => {
     expect(updated?.fields[numberFieldId]).toBe(99);
   });
 
+  it.each([false, true] as const)(
+    'normalizes empty cell writes to null (typecast=%s)',
+    async (typecast) => {
+      const table = await ctx.createTable({
+        baseId: ctx.baseId,
+        name: `Empty Normalize ${typecast ? 'typecast' : 'strict'}`,
+        fields: [
+          { type: 'singleLineText', name: 'Title', isPrimary: true },
+          { type: 'singleLineText', name: 'Text' },
+          { type: 'longText', name: 'Notes' },
+          { type: 'checkbox', name: 'Done' },
+          {
+            type: 'multipleSelect',
+            name: 'Tags',
+            options: ['Red', 'Yellow'],
+          },
+          { type: 'attachment', name: 'Files' },
+        ],
+        views: [{ type: 'grid' }],
+      });
+
+      const titleFieldId = table.fields.find((f) => f.name === 'Title')?.id ?? '';
+      const textEmptyFieldId = table.fields.find((f) => f.name === 'Text')?.id ?? '';
+      const notesFieldId = table.fields.find((f) => f.name === 'Notes')?.id ?? '';
+      const checkboxFieldId = table.fields.find((f) => f.name === 'Done')?.id ?? '';
+      const tagsFieldId = table.fields.find((f) => f.name === 'Tags')?.id ?? '';
+      const filesFieldId = table.fields.find((f) => f.name === 'Files')?.id ?? '';
+      const tagNames =
+        (
+          table.fields.find((f) => f.name === 'Tags')?.options as {
+            choices?: Array<{ name: string }>;
+          }
+        )?.choices?.map((choice) => choice.name) ?? [];
+
+      const record = await ctx.createRecord(table.id, {
+        [titleFieldId]: 'baseline',
+        [textEmptyFieldId]: 'has text',
+        [notesFieldId]: 'has notes',
+        [checkboxFieldId]: true,
+        [tagsFieldId]: tagNames,
+      });
+
+      const response = await fetch(`${ctx.baseUrl}/tables/updateRecord`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tableId: table.id,
+          recordId: record.id,
+          typecast,
+          fields: {
+            [textEmptyFieldId]: '',
+            [notesFieldId]: '',
+            [checkboxFieldId]: false,
+            [tagsFieldId]: [],
+            [filesFieldId]: [],
+          },
+        }),
+      });
+      expect(response.status).toBe(200);
+
+      // Assert via a separate read path, not the update response echo.
+      const records = await ctx.listRecords(table.id);
+      const updated = records.find((r) => r.id === record.id);
+      expect(updated).toBeDefined();
+      if (!updated) return;
+
+      expect(updated.fields[textEmptyFieldId] ?? null).toBeNull();
+      expect(updated.fields[notesFieldId] ?? null).toBeNull();
+      expect(updated.fields[checkboxFieldId] ?? null).toBeNull();
+      expect(updated.fields[tagsFieldId] ?? null).toBeNull();
+      expect(updated.fields[filesFieldId] ?? null).toBeNull();
+    }
+  );
+
   it.each(typecastCases)('updates a record with typecast $name', async (testCase) => {
     const fieldId = testCase.fieldId();
     const record = await ctx.createRecord(typecastTableId, {

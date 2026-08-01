@@ -3,7 +3,10 @@ import type { Result } from 'neverthrow';
 
 import type { IDomainContext } from '../../../shared/DomainContext';
 import { domainError, type DomainError } from '../../../shared/DomainError';
-import { DEFAULT_TABLE_DATA_SAFETY_LIMITS } from '../../../shared/TableDataSafetyLimits';
+import {
+  DEFAULT_TABLE_DATA_SAFETY_LIMITS,
+  tableDataSafetyLimitErrors,
+} from '../../../shared/TableDataSafetyLimits';
 
 export const ensureSelectFieldOptionCountWithinLimit = (
   optionCount: number,
@@ -38,8 +41,12 @@ export const ensureSelectFieldOptionNameWithinLimit = (
 
   return err(
     domainError.validation({
-      code: 'validation.limit.select_choice_name_max_length',
+      code: tableDataSafetyLimitErrors.selectChoiceNameMaxLength.code,
       message: `Select field option names cannot exceed ${maxChoiceNameLength} characters`,
+      localization: {
+        i18nKey: tableDataSafetyLimitErrors.selectChoiceNameMaxLength.i18nKey,
+        context: { max: maxChoiceNameLength },
+      },
     })
   );
 };

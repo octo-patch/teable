@@ -9,26 +9,27 @@ import { RecordWriteSideEffectService } from '../application/services/RecordWrit
 import { TableUpdateFlow } from '../application/services/TableUpdateFlow';
 import { domainError, isDomainError, type DomainError } from '../domain/shared/DomainError';
 import type { IDomainEvent } from '../domain/shared/DomainEvent';
-import { RecordsBatchCreated } from '../domain/table/events/RecordsBatchCreated';
+import { tableDataSafetyLimitErrors } from '../domain/shared/TableDataSafetyLimits';
 import type { RecordValuesDTO } from '../domain/table/events/RecordFieldValuesDTO';
+import { RecordsBatchCreated } from '../domain/table/events/RecordsBatchCreated';
 import type { ICellValueSpec } from '../domain/table/records/specs/values/ICellValueSpecVisitor';
 import type { TableRecord } from '../domain/table/records/TableRecord';
 import { TableByIdSpec } from '../domain/table/specs/TableByIdSpec';
 import type { Table } from '../domain/table/Table';
 import * as EventBusPort from '../ports/EventBus';
 import type { IExecutionContext } from '../ports/ExecutionContext';
-import {
-  RecordWriteOperationKind,
-  type RecordWriteFieldValues,
-  type RecordWriteImportAppendPayload,
-  type RecordWritePluginOrchestration,
-} from '../ports/RecordWritePlugin';
 import type {
   IImportParseResult,
   IImportProgress,
   SourceColumnMap,
 } from '../ports/import/IImportSource';
 import * as IImportSourceRegistryPort from '../ports/import/IImportSourceRegistry';
+import {
+  RecordWriteOperationKind,
+  type RecordWriteFieldValues,
+  type RecordWriteImportAppendPayload,
+  type RecordWritePluginOrchestration,
+} from '../ports/RecordWritePlugin';
 import * as TableRecordRepositoryPort from '../ports/TableRecordRepository';
 import * as TableRepositoryPort from '../ports/TableRepository';
 import { v2CoreTokens } from '../ports/tokens';
@@ -149,12 +150,16 @@ export class ImportRecordsHandler
         if (error instanceof MaxRowCountExceededError) {
           return err(
             domainError.validation({
-              code: 'validation.limit.rows_per_table_max',
+              code: tableDataSafetyLimitErrors.rowsPerTableMax.code,
               message: `Exceed max row limit: ${error.maxRowCount}`,
               details: {
                 max: error.maxRowCount,
                 maxRowCount: error.maxRowCount,
                 rowCount: error.rowCount,
+              },
+              localization: {
+                i18nKey: tableDataSafetyLimitErrors.rowsPerTableMax.i18nKey,
+                context: { max: error.maxRowCount },
               },
             })
           );

@@ -785,7 +785,7 @@ export class BaseNodeService {
         if (name) {
           await this.tableOpenApiService.updateName(baseId, id, name);
         }
-        if (icon) {
+        if (icon !== undefined) {
           await this.tableOpenApiService.updateIcon(baseId, id, icon);
         }
         break;

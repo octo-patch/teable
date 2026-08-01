@@ -1,6 +1,7 @@
 import {
   BaseId,
   DbFieldName,
+  DbFieldType,
   createCreatedByField,
   createFormulaField,
   createLastModifiedByField,
@@ -729,6 +730,33 @@ describe('SameTableBatchQueryBuilder', () => {
       expect(sqlText).not.toContain(
         'FROM "bseaaaaaaaaaaaaaaaa"."tblcccccccccccccccc" AS u, "level_0", "level_1"'
       );
+    });
+    it('materializes JSON-backed formula CTE levels', () => {
+      const db = createMockKysely();
+      const builder = new SameTableBatchQueryBuilder(db, typeValidationStrategy);
+      const { table, plusOneId, plusOneDoubleId } = createChainedFormulaTable();
+
+      for (const fieldId of [plusOneId, plusOneDoubleId]) {
+        table
+          .getField((field) => field.id().equals(fieldId))
+          ._unsafeUnwrap()
+          .setDbFieldType(DbFieldType.rehydrate('JSON')._unsafeUnwrap())
+          ._unsafeUnwrap();
+      }
+
+      const result = builder.build({
+        table,
+        fieldLevels: [
+          { level: 0, fieldIds: [plusOneId] },
+          { level: 1, fieldIds: [plusOneDoubleId] },
+        ],
+        dirtyFilter: { tableId: table.id().toString() },
+      });
+
+      expect(result.isOk()).toBe(true);
+      const compiled = result._unsafeUnwrap().selectQuery.compile(db);
+      expect(compiled.sql).toContain('"level_0" AS MATERIALIZED');
+      expect(compiled.sql).toContain('"level_1" AS MATERIALIZED');
     });
 
     it('builds returning updates from a same-table CTE chain', () => {

@@ -16,12 +16,19 @@ import {
   Table,
   TableAddFieldSpec,
   TableAddFieldsSpec,
+  TableAddViewSpec,
+  TableEnsureViewRowOrderSpec,
   TableId,
   TableRemoveFieldSpec,
   TableName,
   TableUpdateFieldHasErrorSpec,
   TableUpdateFieldTypeSpec,
   UpdateLinkRelationshipSpec,
+  ViewColumnMeta,
+  ViewId,
+  ViewName,
+  ViewQueryDefaults,
+  createGridView,
 } from '@teable/v2-core';
 import { describe, expect, it } from 'vitest';
 
@@ -30,6 +37,67 @@ import { createTestDb } from './helpers/createTestDb';
 import { createDtField } from './helpers/fieldFactories';
 
 describe('TableSchemaUpdateVisitor', () => {
+  describe('visitTableAddView', () => {
+    it('adds, backfills and indexes the row-order column for a grid view', () => {
+      const db = createTestDb();
+      const tableBuilder = Table.builder()
+        .withBaseId(BaseId.create(`bse${'a'.repeat(16)}`)._unsafeUnwrap())
+        .withName(TableName.create('Test Table')._unsafeUnwrap());
+      tableBuilder
+        .field()
+        .singleLineText()
+        .withName(FieldName.create('Name')._unsafeUnwrap())
+        .done();
+      tableBuilder.view().defaultGrid().done();
+      const table = tableBuilder.build()._unsafeUnwrap();
+      const view = createGridView({
+        id: ViewId.create(`viw${'b'.repeat(16)}`)._unsafeUnwrap(),
+        name: ViewName.create('Planning')._unsafeUnwrap(),
+      })._unsafeUnwrap();
+      view
+        .setColumnMeta(
+          ViewColumnMeta.forView({
+            viewType: view.type(),
+            fields: table.getFields(),
+            primaryFieldId: table.primaryFieldId(),
+          })._unsafeUnwrap()
+        )
+        ._unsafeUnwrap();
+      view.setQueryDefaults(ViewQueryDefaults.empty())._unsafeUnwrap();
+
+      const visitor = new TableSchemaUpdateVisitor({
+        db,
+        schema: 'public',
+        tableName: 'table_data',
+        tableId: table.id().toString(),
+        table,
+      });
+      const statements = visitor.visitTableAddView(TableAddViewSpec.create(view))._unsafeUnwrap();
+      const sqls = statements.map((statement) => statement.compile(db).sql);
+
+      expect(sqls).toHaveLength(3);
+      expect(sqls[0].toLowerCase()).toContain('add column if not exists');
+      expect(sqls[0]).toContain(view.id().toRowOrderColumnName());
+      expect(sqls[1]).toContain('"__auto_number"');
+      expect(sqls[2].toLowerCase()).toBe(
+        `create index if not exists "idx_${view.id().toRowOrderColumnName()}" on "public"."table_data" ("${view.id().toRowOrderColumnName()}")`
+      );
+
+      const ensureVisitor = new TableSchemaUpdateVisitor({
+        db,
+        schema: 'public',
+        tableName: 'table_data',
+        tableId: table.id().toString(),
+        table,
+      });
+      const ensureSqls = ensureVisitor
+        .visitTableEnsureViewRowOrder(TableEnsureViewRowOrderSpec.create(view))
+        ._unsafeUnwrap()
+        .map((statement) => statement.compile(db).sql);
+      expect(ensureSqls).toEqual(sqls);
+    });
+  });
+
   describe('visitTableUpdateFieldConstraints', () => {
     describe('NOT NULL constraint', () => {
       it.todo(

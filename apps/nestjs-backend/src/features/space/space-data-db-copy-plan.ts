@@ -534,7 +534,20 @@ const buildMigrationSharedTableDefinitions = (input: {
     },
     {
       table: 'record_trash',
-      columns: ['id', 'table_id', 'record_id', 'snapshot', 'created_time', 'created_by'],
+      columns: [
+        'id',
+        'table_id',
+        'record_id',
+        'snapshot',
+        'created_time',
+        'created_by',
+        'reason',
+        'record_created_time',
+        'record_created_by',
+        'record_last_modified_time',
+        'record_last_modified_by',
+        'operation_id',
+      ],
       whereSql: tablePredicate,
     },
     {
@@ -580,6 +593,11 @@ const buildMigrationSharedTableDefinitions = (input: {
         'created_at',
       ],
       whereSql: undoPredicate,
+    },
+    {
+      table: 'record_removal_tombstone',
+      columns: ['id', 'table_id', 'record_id', 'type', 'created_time'],
+      whereSql: tablePredicate,
     },
   ];
 };

@@ -386,6 +386,8 @@
       "tableTrashRead": "Read table trash",
       "tableTrashUpdate": "Update table trash",
       "tableTrashReset": "Reset table trash",
+      "tableArchiveRead": "Tablo arşivini görüntüle",
+      "tableArchiveManage": "Tablo arşivini yönet",
       "viewCreate": "Görünüm oluştur",
       "viewDelete": "Görünüm sil",
       "viewRead": "Görünüm oku",
@@ -401,6 +403,7 @@
       "recordRead": "Kayıt oku",
       "recordUpdate": "Kayıt güncelle",
       "recordCopy": "Copy record",
+      "recordArchive": "Kaydı arşivle",
       "automationCreate": "Otomasyon oluştur",
       "automationDelete": "Otomasyon sil",
       "automationRead": "Otomasyon oku",
@@ -926,15 +929,18 @@
       "nameMaxLength": "Ad çok uzun. En fazla {{max}} karakter olabilir.",
       "descriptionMaxLength": "Açıklama çok uzun. En fazla {{max}} karakter olabilir."
     },
-    "validation": {
-      "field": {
-        "unique": "Alan benzersiz bir değere sahip olmalıdır"
-      }
-    },
     "custom": {
       "fieldValueNotNull": "\"{{tableName}}\" alanı \"{{fieldName}}\" boş değerlere izin vermiyor, lütfen tamamlayınız ve gönderimden önce doldurun.",
       "fieldValueDuplicate": "\"{{tableName}}\" alanı \"{{fieldName}}\" tekrarlayan değerlere izin vermiyor, lütfen benzersiz bir değer doldurun ve gönderimden önce doldurun.",
+      "recordFieldValueNotNull": "\"{{fieldName}}\" alanı boş değerlere izin vermiyor, lütfen göndermeden önce doldurun.",
+      "recordFieldValueDuplicate": "\"{{fieldName}}\" alanı tekrarlayan değerlere izin vermiyor, lütfen göndermeden önce benzersiz bir değer girin.",
       "linkFieldValueDuplicate": "\"{{fieldName}}\" alanı aynı kayıtla tekrarlayan değerlere izin vermiyor.",
+      "linkBatchDuplicate": "Kayıt bağlanamıyor: aynı grupta bu kayıt zaten başka bir kayıt tarafından bağlanmış. Bire-çok ilişkilerde her alt kayıt yalnızca bir üst kayda ait olabilir.",
+      "linkOneManyDuplicate": "Kayıt bağlanamıyor: bu kayıt zaten başka bir kayda bağlı. Bire-çok ilişkilerde her alt kayıt yalnızca bir üst kayda ait olabilir.",
+      "linkOneOneDuplicate": "Kayıt bağlanamıyor: hedef kayıt bire-bir ilişkide zaten başka bir kayıt tarafından bağlanmış.",
+      "fieldMaxColumnLimit": "\"{{tableName}}\" tablosunda en fazla {{maxFieldCount}} alan olabilir.",
+      "fieldRequiredExistingValues": "\"{{fieldName}}\" alanı zorunlu olarak işaretlenemez çünkü mevcut kayıtlarda boş değerler var.",
+      "fieldUniqueExistingValues": "\"{{fieldName}}\" alanı benzersiz olarak işaretlenemez çünkü mevcut kayıtlarda tekrarlayan değerler var.",
       "requestTimeout": "İşlem kapsamı çok büyük, lütfen kapsamı daraltıp tekrar deneyin.",
       "searchTimeOut": "Arama tamamlandı, arama kapsamını azaltarak tekrar deneyin.",
       "dependencyNodeRequire": "Bağımlı düğüm test edilmedi, lütfen önceki düğümleri test edin",

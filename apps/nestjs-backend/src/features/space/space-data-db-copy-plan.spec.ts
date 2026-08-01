@@ -456,6 +456,7 @@ describe('space data DB copy plan', () => {
       'computed_update_dead_letter',
       'computed_update_outbox_seed',
       '__undo_log',
+      'record_removal_tombstone',
     ]);
     expect(plans[0].sourceSql).toContain(`"table_id" = ANY(ARRAY['tblxxx', 'tblyyy']::text[])`);
     expect(plans[3].sourceSql).toContain(`"scope_id" = ANY(ARRAY['spc''x']::text[])`);
@@ -466,6 +467,7 @@ describe('space data DB copy plan', () => {
     expect(plans[7].sourceSql).toContain(
       `split_part("table_name", '.', 1) = ANY(ARRAY['bsexxx', 'bseyyy']::text[])`
     );
+    expect(plans[8].sourceSql).toContain(`"table_id" = ANY(ARRAY['tblxxx', 'tblyyy']::text[])`);
     expect(plans.every((plan) => plan.source.args.includes(sourceUrl))).toBe(true);
     expect(plans.every((plan) => plan.target.args.includes(targetUrl))).toBe(true);
   });
@@ -489,6 +491,9 @@ describe('space data DB copy plan', () => {
       `"table_id" = ANY(ARRAY['tblactive', 'tbldeleted']::text[])`
     );
     expect(plans.find((plan) => plan.table === 'record_trash')?.sourceSql).toContain(
+      `"table_id" = ANY(ARRAY['tblactive', 'tbldeleted']::text[])`
+    );
+    expect(plans.find((plan) => plan.table === 'record_removal_tombstone')?.sourceSql).toContain(
       `"table_id" = ANY(ARRAY['tblactive', 'tbldeleted']::text[])`
     );
     expect(plans.find((plan) => plan.table === 'computed_update_outbox_seed')?.sourceSql).toContain(
@@ -521,6 +526,7 @@ describe('space data DB copy plan', () => {
       'computed_update_dead_letter',
       'computed_update_outbox_seed',
       '__undo_log',
+      'record_removal_tombstone',
     ]);
     expect(plans[0].sql).toContain('FROM "sdmjxxx_fdw_0"."record_history"');
     expect(plans[3].sql).toContain(`"scope_id" = ANY(ARRAY['spc''x']::text[])`);

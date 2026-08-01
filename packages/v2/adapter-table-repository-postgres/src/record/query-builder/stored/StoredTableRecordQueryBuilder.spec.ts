@@ -1,10 +1,16 @@
 import {
   BaseId,
+  CellValueMultiplicity,
+  CellValueType,
   DateFormattingPreset,
   DateTimeFormatting,
   DbFieldName,
+  DbFieldType,
+  FieldHasError,
+  FieldId,
   FieldName,
   FieldType,
+  FormulaExpression,
   RecordConditionFieldReferenceValue,
   Table,
   TableId,
@@ -173,6 +179,102 @@ describe('StoredTableRecordQueryBuilder', () => {
         `"select "t"."__id" as "__id", "t"."__version" as "__version", "t"."__auto_number" as "__auto_number", "t"."__created_time" as "__created_time", "t"."__created_by" as "__created_by", "t"."__last_modified_time" as "__last_modified_time", "t"."__last_modified_by" as "__last_modified_by", "t"."col_single_line_text" as "col_single_line_text", "t"."col_long_text" as "col_long_text", "t"."col_number" as "col_number", "t"."col_rating" as "col_rating", "t"."col_single_select" as "col_single_select", "t"."col_multiple_select" as "col_multiple_select", "t"."col_checkbox" as "col_checkbox", "t"."col_attachment" as "col_attachment", "t"."col_date" as "col_date", "t"."col_created_time" as "col_created_time", "t"."col_last_modified_time" as "col_last_modified_time", "t"."col_user" as "col_user", "t"."col_created_by" as "col_created_by", "t"."col_last_modified_by" as "col_last_modified_by", "t"."col_auto_number" as "col_auto_number", "t"."col_button" as "col_button" from "bseaaaaaaaaaaaaaaaa"."tblmmmmmmmmmmmmmmmm" as "t""`
       );
       expect(parameters).toEqual([]);
+    });
+
+    test('projects typed nulls instead of stale stored values for errored computed fields', () => {
+      const db = createTestDb();
+      const primaryFieldId = FieldId.create(`fld${'p'.repeat(16)}`)._unsafeUnwrap();
+      const formulaFieldId = FieldId.create(`fld${'f'.repeat(16)}`)._unsafeUnwrap();
+      const builder = Table.builder()
+        .withId(TableId.create(MAIN_TABLE_ID)._unsafeUnwrap())
+        .withBaseId(BaseId.create(BASE_ID)._unsafeUnwrap())
+        .withName(TableName.create('ErroredComputedTable')._unsafeUnwrap());
+      builder
+        .field()
+        .singleLineText()
+        .withId(primaryFieldId)
+        .withName(FieldName.create('Title')._unsafeUnwrap())
+        .primary()
+        .done();
+      builder
+        .field()
+        .formula()
+        .withId(formulaFieldId)
+        .withName(FieldName.create('Broken formula')._unsafeUnwrap())
+        .withExpression(FormulaExpression.create(`{${primaryFieldId.toString()}}`)._unsafeUnwrap())
+        .withResultType({
+          cellValueType: CellValueType.string(),
+          isMultipleCellValue: CellValueMultiplicity.single(),
+        })
+        .done();
+      builder.view().defaultGrid().done();
+      const table = builder.build()._unsafeUnwrap();
+      const formulaField = table
+        .getField((field) => field.id().equals(formulaFieldId))
+        ._unsafeUnwrap();
+      formulaField
+        .setDbFieldName(DbFieldName.rehydrate('col_broken_formula')._unsafeUnwrap())
+        ._unsafeUnwrap();
+      formulaField.setDbFieldType(DbFieldType.rehydrate('TEXT')._unsafeUnwrap())._unsafeUnwrap();
+      formulaField.setHasError(FieldHasError.error());
+
+      const qb = new StoredTableRecordQueryBuilder(db);
+      const { sql } = compileQuery(
+        db,
+        qb.from(table).select([formulaFieldId]).orderBy(formulaFieldId, 'asc')
+      );
+
+      expect(sql).toContain('NULL::text as "col_broken_formula"');
+      expect(sql).toContain('order by NULL::text is null desc, NULL::text asc');
+      expect(sql).not.toContain('"t"."col_broken_formula"');
+    });
+
+    test('emits uncast NULL for errored computed fields with unknown dbFieldType', () => {
+      const db = createTestDb();
+      const primaryFieldId = FieldId.create(`fld${'p'.repeat(16)}`)._unsafeUnwrap();
+      const formulaFieldId = FieldId.create(`fld${'f'.repeat(16)}`)._unsafeUnwrap();
+      const builder = Table.builder()
+        .withId(TableId.create(MAIN_TABLE_ID)._unsafeUnwrap())
+        .withBaseId(BaseId.create(BASE_ID)._unsafeUnwrap())
+        .withName(TableName.create('ErroredComputedTable')._unsafeUnwrap());
+      builder
+        .field()
+        .singleLineText()
+        .withId(primaryFieldId)
+        .withName(FieldName.create('Title')._unsafeUnwrap())
+        .primary()
+        .done();
+      builder
+        .field()
+        .formula()
+        .withId(formulaFieldId)
+        .withName(FieldName.create('Broken formula')._unsafeUnwrap())
+        .withExpression(FormulaExpression.create(`{${primaryFieldId.toString()}}`)._unsafeUnwrap())
+        .withResultType({
+          cellValueType: CellValueType.string(),
+          isMultipleCellValue: CellValueMultiplicity.single(),
+        })
+        .done();
+      builder.view().defaultGrid().done();
+      const table = builder.build()._unsafeUnwrap();
+      const formulaField = table
+        .getField((field) => field.id().equals(formulaFieldId))
+        ._unsafeUnwrap();
+      formulaField
+        .setDbFieldName(DbFieldName.rehydrate('col_broken_formula')._unsafeUnwrap())
+        ._unsafeUnwrap();
+      // Persisted metadata is untrusted: must never reach raw SQL as a cast.
+      formulaField
+        .setDbFieldType(DbFieldType.rehydrate(`text) FROM x --`)._unsafeUnwrap())
+        ._unsafeUnwrap();
+      formulaField.setHasError(FieldHasError.error());
+
+      const qb = new StoredTableRecordQueryBuilder(db);
+      const { sql } = compileQuery(db, qb.from(table).select([formulaFieldId]));
+
+      expect(sql).toContain('NULL as "col_broken_formula"');
+      expect(sql).not.toContain('NULL::');
+      expect(sql).not.toContain('FROM x');
     });
 
     test('applies limit and offset', () => {

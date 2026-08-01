@@ -9,6 +9,7 @@ import type {
   ICellValueSpecVisitor,
 } from '../../domain/table/records/specs/values/ICellValueSpecVisitor';
 import { SetAttachmentValueSpec } from '../../domain/table/records/specs/values/SetAttachmentValueSpec';
+import type { SetButtonValueSpec } from '../../domain/table/records/specs/values/SetButtonValueSpec';
 import { SetLinkValueByTitleSpec } from '../../domain/table/records/specs/values/SetLinkValueByTitleSpec';
 import type { SetLinkValueSpec } from '../../domain/table/records/specs/values/SetLinkValueSpec';
 import type { SetRowOrderValueSpec } from '../../domain/table/records/specs/values/SetRowOrderValueSpec';
@@ -74,6 +75,9 @@ class SpecResolutionCollector implements ICellValueSpecVisitor {
   }
   visitSetAttachmentValue(spec: SetAttachmentValueSpec): Result<void, DomainError> {
     this.addSpec(spec);
+    return ok(undefined);
+  }
+  visitSetButtonValue(_spec: SetButtonValueSpec): Result<void, DomainError> {
     return ok(undefined);
   }
   visitSetUserValue(spec: SetUserValueSpec): Result<void, DomainError> {

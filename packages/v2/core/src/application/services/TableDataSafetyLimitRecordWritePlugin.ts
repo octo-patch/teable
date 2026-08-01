@@ -4,6 +4,7 @@ import type { Result } from 'neverthrow';
 import type { DomainError } from '../../domain/shared/DomainError';
 import {
   ensureWithinTableDataSafetyLimit,
+  tableDataSafetyLimitErrors,
   measureJsonBytes,
   resolveTableDataSafetyLimits,
 } from '../../domain/shared/TableDataSafetyLimits';
@@ -13,10 +14,8 @@ import {
   type RecordWriteFieldValues,
   type RecordWritePluginContext,
 } from '../../ports/RecordWritePlugin';
-import {
-  createDefaultTableDataSafetyLimitComposer,
-  TableDataSafetyLimitComposer,
-} from './TableDataSafetyLimitComposer';
+import type { TableDataSafetyLimitComposer } from './TableDataSafetyLimitComposer';
+import { createDefaultTableDataSafetyLimitComposer } from './TableDataSafetyLimitComposer';
 
 type PreparedTableDataSafetyRecordLimitState = {
   readonly limits: ReturnType<typeof resolveTableDataSafetyLimits>;
@@ -102,7 +101,7 @@ export class TableDataSafetyLimitRecordWritePlugin
   ): Result<void, DomainError> {
     const limits = preparedState?.limits ?? resolveTableDataSafetyLimits();
     const recordCountResult = ensureWithinTableDataSafetyLimit(
-      'validation.limit.records_per_mutation_max',
+      tableDataSafetyLimitErrors.recordsPerMutationMax,
       recordCountFromContext(context),
       limits.recordValues.maxRecordsPerMutation,
       {
@@ -116,7 +115,7 @@ export class TableDataSafetyLimitRecordWritePlugin
     for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
       const record = records[recordIndex]!;
       const recordBytesResult = ensureWithinTableDataSafetyLimit(
-        'validation.limit.record_fields_max_bytes',
+        tableDataSafetyLimitErrors.recordFieldsMaxBytes,
         measureJsonBytes(Object.fromEntries(record)),
         limits.recordValues.maxRecordFieldsBytes,
         {
@@ -129,7 +128,7 @@ export class TableDataSafetyLimitRecordWritePlugin
 
       for (const [fieldId, value] of record.entries()) {
         const cellBytesResult = ensureWithinTableDataSafetyLimit(
-          'validation.limit.cell_value_max_bytes',
+          tableDataSafetyLimitErrors.cellValueMaxBytes,
           measureJsonBytes(value),
           limits.recordValues.maxCellValueBytes,
           {

@@ -451,7 +451,9 @@ const getScenario = (tableCount: number, profileId: string): IScenarioState => {
 };
 
 const setup = async () => {
-  const testContainer = await createV2NodeTestContainer();
+  // The delete-row benches time the delete path; the record_trash sink would add
+  // one INSERT per iteration and skew the numbers.
+  const testContainer = await createV2NodeTestContainer({ trashSink: false });
   testContainer.container.registerInstance(v2CoreTokens.logger, new NoopLogger());
   dispose = testContainer.dispose;
   baseId = testContainer.baseId.toString();

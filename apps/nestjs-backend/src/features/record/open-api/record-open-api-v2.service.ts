@@ -10,6 +10,7 @@ import {
   HttpErrorCode,
   TimeFormatting,
   formatDateToString,
+  getDbFieldType,
   isMeTag,
   parseClipboardText,
   type IAttachmentItem,
@@ -17,9 +18,11 @@ import {
   type IFieldVo,
   type IFilter,
   type IFilterSet,
+  type ISnapshotBase,
 } from '@teable/core';
 import type {
   IClearSelectionStreamEvent,
+  IButtonClickVo,
   IDeleteSelectionStreamEvent,
   IDuplicateSelectionStreamEvent,
   IPasteSelectionStreamEvent,
@@ -38,8 +41,10 @@ import type {
   ISelectionIdsRo,
   IRecordsVo,
   IRecordInsertOrderRo,
+  IGroupHeaderRef,
+  IGroupPoint,
 } from '@teable/openapi';
-import { RangeType } from '@teable/openapi';
+import { GroupPointType, RangeType } from '@teable/openapi';
 import { mapDomainErrorToHttpError, mapDomainErrorToHttpStatus } from '@teable/v2-contract-http';
 import {
   executeCreateRecordsEndpoint,
@@ -55,57 +60,103 @@ import {
 } from '@teable/v2-contract-http-implementation/handlers';
 import {
   ClearStreamCommand,
+  ClickButtonCommand,
+  buildUserAvatarUrl,
   DeleteByRangeStreamCommand,
   DuplicateRecordsStreamCommand,
+  FieldOptionsDtoVisitor,
+  FieldType as V2FieldType,
+  FieldValueTypeVisitor,
+  isForbiddenError,
+  ListTableRecordsQuery,
   PasteStreamCommand,
+  ResetButtonCommand,
+  presignAttachmentFieldMaps,
+  RecordQueryOperationKind,
+  TableByIdSpec,
+  TableId,
   v2CoreTokens,
   type ClearStreamResult,
+  type ClickButtonResult,
   type DeleteByRangeStreamResult,
   type DuplicateRecordsStreamResult,
+  type IAttachmentUrlSignerService,
   type ICommandBus,
+  type IDeleteRecordsCommandOptions,
   type IExecutionContext,
   type IListTableRecordsQueryInput,
   type IPasteCommandInput,
   type IQueryBus,
   type IRecordReadQuerySource,
   type IRecordSearchAccessPath,
+  type ITableRepository,
+  type ITableRecordGroup,
+  type IUserLookupService,
+  type ConditionalLookupField,
+  type Field as V2Field,
+  type LastModifiedByField,
+  type ListTableRecordsResult,
+  type LookupField,
   type PasteStreamResult,
+  type ResetButtonResult,
   type RecordFilter,
   type RecordFilterDateValue,
   type RecordFilterGroup,
   type RecordFilterNode,
   type RecordFilterOperator,
   type RecordFilterValue,
+  type RecordQueryPluginRunner,
+  type RecordQueryPluginScope,
   type RecordWritePluginRunnerOptions,
+  type Table,
+  type TableRecordReadModel,
 } from '@teable/v2-core';
 import type { DependencyContainer } from '@teable/v2-di';
 import { pick } from 'lodash';
 import { ClsService } from 'nestjs-cls';
 import { CacheService } from '../../../cache/cache.service';
 import type { ICacheStore } from '../../../cache/types';
-import { CustomHttpException, getDefaultCodeByStatus } from '../../../custom.exception';
+import { CustomHttpException } from '../../../custom.exception';
 import { DataDbClientManager } from '../../../global/data-db-client-manager.service';
 import type { IClsStore } from '../../../types/cls';
+import { convertValueToStringify, string2Hash } from '../../../utils';
+import { generateFilterItem } from '../../../utils/filter';
 import { AggregationService } from '../../aggregation/aggregation.service';
 import { AttachmentsService } from '../../attachments/attachments.service';
 import { AuditScope } from '../../audit/audit-scope';
 import { FieldService } from '../../field/field.service';
 import type { IFieldInstance } from '../../field/model/factory';
 import { createFieldInstanceByVo } from '../../field/model/factory';
-import { TableService } from '../../table/table.service';
 import { SpaceDataDbMigrationGuardService } from '../../space/space-data-db-migration-guard.service';
+import { TableService } from '../../table/table.service';
 import { buildUndoRedoEnginePreferenceKey } from '../../undo-redo/open-api/undo-redo-engine-preference';
 import { TableQuerySearchVectorRuntimeService } from '../../v2/table-query-search-vector-runtime.service';
 import { V2ContainerService } from '../../v2/v2-container.service';
 import { V2ExecutionContextFactory } from '../../v2/v2-execution-context.factory';
+import { throwV2Error } from '../../v2/v2-http-error';
 import { convertLinkPasteCellValue } from '../paste-link-cell-value';
 import { RecordPermissionService } from '../record-permission.service';
 import { RecordService } from '../record.service';
 
 const internalServerError = 'Internal server error';
 const invalidFilterCode = 'validation.invalid_filter';
+const publicUserFieldTypes: ReadonlySet<string> = new Set(['user', 'createdBy', 'lastModifiedBy']);
+
+interface IRecordsWithVersions {
+  result: IRecordsVo;
+  versionByRecordId: ReadonlyMap<string, number>;
+}
 const dataTxClientKey = 'dataTx.client';
 const maxResolveSelectionRecordIdsPageSize = 1000;
+const defaultMaxGroupPoints = 5_000;
+const configuredMaxGroupPoints = Number.parseInt(
+  process.env.MAX_GROUP_POINTS ?? String(defaultMaxGroupPoints),
+  10
+);
+const maxGroupPoints =
+  Number.isSafeInteger(configuredMaxGroupPoints) && configuredMaxGroupPoints > 0
+    ? configuredMaxGroupPoints
+    : defaultMaxGroupPoints;
 const describeTraceError = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 const v1SymbolOperatorMap: Record<string, string> = {
@@ -138,7 +189,10 @@ const dateFilterFieldTypes: ReadonlySet<FieldType> = new Set([
   FieldType.LastModifiedTime,
 ]);
 
-type FilterFieldMeta = Pick<IFieldInstance, 'type' | 'cellValueType' | 'options'>;
+type FilterFieldMeta = Pick<IFieldInstance, 'type' | 'cellValueType'> & {
+  /** Optional — pure-V2 table aggregate may not materialize full V1 options. */
+  options?: IFieldInstance['options'];
+};
 
 @Injectable()
 export class RecordOpenApiV2Service {
@@ -162,22 +216,6 @@ export class RecordOpenApiV2Service {
 
   private async assertTableRecordWritable(tableId: string): Promise<void> {
     await this.spaceDataDbMigrationGuard.assertTableRecordWritable(tableId);
-  }
-
-  private throwV2Error(
-    error: {
-      code: string;
-      message: string;
-      tags?: ReadonlyArray<string>;
-      details?: Readonly<Record<string, unknown>>;
-    },
-    status: number
-  ): never {
-    throw new CustomHttpException(error.message, getDefaultCodeByStatus(status), {
-      domainCode: error.code,
-      domainTags: error.tags,
-      details: error.details,
-    });
   }
 
   private getUndoRedoEnginePreferenceKey(
@@ -253,8 +291,35 @@ export class RecordOpenApiV2Service {
   }
 
   async getRecords(tableId: string, query: IGetRecordsRo): Promise<IRecordsVo> {
+    this.assertValidListQuery(query);
+
+    const container = await this.v2ContainerService.getContainerForTable(tableId);
+    const context = await this.v2ContextFactory.createContext(container);
+    const table = await this.loadV2Table(context, container, tableId);
+    const queryScope = await this.prepareRecordQueryScope(context, container, table, {
+      kind: RecordQueryOperationKind.list,
+      viewId: query.viewId,
+      ignoreViewQuery: query.ignoreViewQuery,
+      limit: query.take,
+      offset: query.skip,
+      // Match legacy CTE keepPrimaryKey: skip row filter for link-selected reads.
+      keepPrimaryKey: Boolean(query.filterLinkCellSelected),
+    });
+
+    const result = await this.getRecordsWithPreparedScope(
+      tableId,
+      query,
+      queryScope,
+      container,
+      context,
+      table
+    );
+    return result.result;
+  }
+
+  private assertValidListQuery(query: IGetRecordsRo): void {
     if (query.filterLinkCellSelected && query.filterLinkCellCandidate) {
-      this.throwV2Error(
+      throwV2Error(
         {
           code: invalidFilterCode,
           message:
@@ -264,37 +329,57 @@ export class RecordOpenApiV2Service {
         HttpStatus.BAD_REQUEST
       );
     }
+  }
 
-    const container = await this.v2ContainerService.getContainerForTable(tableId);
-    const { context, recordReadQuerySource } = await this.createV2ReadContext(
-      tableId,
-      query,
-      container
-    );
-    const enabledFieldIds = recordReadQuerySource?.enabledFieldIds;
+  /**
+   * List implementation that reuses a pre-built plugin scope (list / getOne / getByIds).
+   */
+  private async getRecordsWithPreparedScope(
+    tableId: string,
+    query: IGetRecordsRo,
+    queryScope: RecordQueryPluginScope | undefined,
+    container: DependencyContainer,
+    context: IExecutionContext,
+    table: Table,
+    options?: {
+      projectionFieldIds?: ReadonlyArray<string>;
+    }
+  ): Promise<IRecordsWithVersions> {
+    // undefined = unrestricted; empty array = no user fields (deny-all fields).
+    const enabledFieldIds =
+      queryScope?.readableFieldIds != null ? [...queryScope.readableFieldIds] : undefined;
+    // Clients often send groupBy/orderBy field *names*; list uses field ids.
+    // Resolve before dispatch; the V2 handler owns permission validation so
+    // explicit unreadable sort/group keys cannot be silently removed here.
     const effectiveQuery = {
       ...query,
-      ...this.sanitizeReadableSortAndGroup(query, enabledFieldIds),
+      orderBy: this.resolveSortGroupFieldKeysToIds(table, query.orderBy ?? undefined),
+      groupBy: this.resolveSortGroupFieldKeysToIds(table, query.groupBy ?? undefined),
     } satisfies IGetRecordsRo;
 
     const requestedFieldKeyType = query.fieldKeyType ?? FieldKeyType.Name;
-    const snapshotProjection = await this.withRecordReadSpan(
-      context,
-      'teable.RecordOpenApiV2Service.resolveSnapshotProjection',
-      {
-        'record.read.has_explicit_projection': Boolean(query.projection),
-        'record.read.has_enabled_fields': Boolean(enabledFieldIds?.length),
-        'record.read.field_key_type': requestedFieldKeyType,
-      },
-      () => this.resolveSnapshotProjection(tableId, query, requestedFieldKeyType, enabledFieldIds)
-    );
-    const normalizedFilter = await this.withRecordReadSpan(
+    // Field metadata comes only from the V2 table aggregate (DDD), never FieldService.
+    const projectionFieldIds =
+      options?.projectionFieldIds != null
+        ? [...options.projectionFieldIds]
+        : this.withRecordReadSyncSpan(
+            context,
+            'teable.RecordOpenApiV2Service.resolveListProjection',
+            {
+              'record.read.has_explicit_projection': Boolean(query.projection),
+              'record.read.has_enabled_fields': enabledFieldIds != null,
+              'record.read.field_key_type': requestedFieldKeyType,
+            },
+            () => this.resolveListProjectionFieldIdsFromTable(table, query, enabledFieldIds)
+          );
+    const filterWithCollapsedGroups = effectiveQuery.filter;
+    const normalizedFilter = this.withRecordReadSyncSpan(
       context,
       'teable.RecordOpenApiV2Service.normalizeFilter',
       {
-        'record.read.has_filter': Boolean(query.filter),
+        'record.read.has_filter': Boolean(filterWithCollapsedGroups),
       },
-      () => this.normalizeFilterForV2(tableId, query.filter)
+      () => this.normalizeFilterForV2FromTable(table, filterWithCollapsedGroups)
     );
     const sortWithGroupFallback = this.mergeGroupByIntoSort(
       effectiveQuery.groupBy,
@@ -311,131 +396,762 @@ export class RecordOpenApiV2Service {
       container,
       effectiveQuery.search
     );
-    const queryExtra = await this.loadQueryExtraWithTrace(
-      context,
-      tableId,
-      effectiveQuery,
-      recordSearchAccessPath
-    );
+    const shouldExposeGroupMetadata =
+      this.shouldLoadQueryExtra(effectiveQuery, recordSearchAccessPath) &&
+      Boolean(effectiveQuery.groupBy?.length);
+    const shouldComputeGroupMetadata =
+      Boolean(effectiveQuery.groupBy?.length) &&
+      (shouldExposeGroupMetadata || Boolean(effectiveQuery.collapsedGroupIds?.length));
+    // Grouped reads compute group metadata purely in V2. The residual V1 extra
+    // query pages by a groupBy-free sort, so its searchHitIndex would point at
+    // rows outside the grouped V2 page — omit it rather than return wrong hits.
+    const legacyQueryExtra = shouldComputeGroupMetadata
+      ? undefined
+      : await this.loadQueryExtraWithTrace(
+          context,
+          tableId,
+          effectiveQuery,
+          recordSearchAccessPath,
+          queryScope
+        );
 
     const queryBus = container.resolve<IQueryBus>(v2CoreTokens.queryBus);
-    const pageResult = await this.withRecordReadSpan(
+    const listInput = {
+      tableId,
+      // List always uses field ids internally; response keys remapped below.
+      fieldKeyType: 'id' as const,
+      limit: query.take,
+      offset: query.skip,
+      projection: projectionFieldIds,
+      includeTotal: shouldComputeGroupMetadata,
+      ...(normalizedFilter ? { filter: normalizedFilter } : {}),
+      ...(normalizedSort?.length ? { sort: normalizedSort } : {}),
+      ...(normalizedGroupBy?.length ? { groupBy: normalizedGroupBy } : {}),
+      ...(effectiveQuery.search ? { search: effectiveQuery.search } : {}),
+      ...(effectiveQuery.filterLinkCellSelected
+        ? { filterLinkCellSelected: effectiveQuery.filterLinkCellSelected }
+        : {}),
+      ...(effectiveQuery.filterLinkCellCandidate
+        ? { filterLinkCellCandidate: effectiveQuery.filterLinkCellCandidate }
+        : {}),
+      ...(effectiveQuery.selectedRecordIds?.length
+        ? { selectedRecordIds: effectiveQuery.selectedRecordIds }
+        : {}),
+      ...(effectiveQuery.viewId ? { viewId: effectiveQuery.viewId } : {}),
+      ...(effectiveQuery.ignoreViewQuery !== undefined
+        ? { ignoreViewQuery: effectiveQuery.ignoreViewQuery }
+        : {}),
+    } satisfies IListTableRecordsQueryInput;
+    let listResult = await this.withRecordReadSpan(
       context,
-      'teable.RecordOpenApiV2Service.listRecordIds',
+      'teable.RecordOpenApiV2Service.listRecords',
       {
         'record.read.limit': query.take ?? 0,
         'record.read.offset': query.skip ?? 0,
         'record.read.has_filter': Boolean(normalizedFilter),
         'record.read.sort_count': normalizedSort?.length ?? 0,
         'record.read.group_by_count': normalizedGroupBy?.length ?? 0,
+        'record.read.projection_count': projectionFieldIds.length,
+        'record.read.has_query_scope': Boolean(queryScope),
       },
       () =>
-        this.executeListRecordsEndpoint(
-          {
-            tableId,
-            // FieldKeyPipe has normalized request field keys to ids.
-            fieldKeyType: FieldKeyType.Id,
-            limit: query.take,
-            offset: query.skip,
-            projection: [],
-            includeTotal: false,
-            ...(normalizedFilter ? { filter: normalizedFilter } : {}),
-            ...(normalizedSort?.length ? { sort: normalizedSort } : {}),
-            ...(normalizedGroupBy?.length ? { groupBy: normalizedGroupBy } : {}),
-            ...(effectiveQuery.search ? { search: effectiveQuery.search } : {}),
-            ...(effectiveQuery.filterLinkCellSelected
-              ? { filterLinkCellSelected: effectiveQuery.filterLinkCellSelected }
-              : {}),
-            ...(effectiveQuery.filterLinkCellCandidate
-              ? { filterLinkCellCandidate: effectiveQuery.filterLinkCellCandidate }
-              : {}),
-            ...(effectiveQuery.selectedRecordIds?.length
-              ? { selectedRecordIds: effectiveQuery.selectedRecordIds }
-              : {}),
-            ...(effectiveQuery.viewId ? { viewId: effectiveQuery.viewId } : {}),
-            ...(effectiveQuery.ignoreViewQuery !== undefined
-              ? { ignoreViewQuery: effectiveQuery.ignoreViewQuery }
-              : {}),
-          },
-          context,
-          queryBus,
-          recordReadQuerySource || recordSearchAccessPath
-            ? { recordReadQuerySource, recordSearchAccessPath }
-            : undefined
-        )
+        this.executeListTableRecordsQuery(listInput, context, queryBus, {
+          queryScope,
+          ...(recordSearchAccessPath ? { recordSearchAccessPath } : {}),
+          includeGroupMetadata: shouldComputeGroupMetadata,
+          ...(shouldComputeGroupMetadata ? { groupLimit: maxGroupPoints } : {}),
+        })
     );
-    const orderedRecords = pageResult.records;
 
-    if (orderedRecords.length === 0) {
-      return queryExtra ? { records: [], extra: queryExtra } : { records: [] };
+    let computedGroupExtra = shouldComputeGroupMetadata
+      ? this.buildGroupQueryExtra(
+          table,
+          effectiveQuery.groupBy,
+          listResult.groups,
+          listResult.total,
+          effectiveQuery.collapsedGroupIds
+        )
+      : undefined;
+    computedGroupExtra = await this.hydrateLegacyUserGroupExtra(
+      container,
+      table,
+      effectiveQuery.groupBy,
+      computedGroupExtra
+    );
+    let queryExtra = this.mergeQueryExtra(
+      shouldExposeGroupMetadata ? computedGroupExtra : undefined,
+      legacyQueryExtra
+    );
+    queryExtra = await this.presignAttachmentGroupExtra(
+      container,
+      table,
+      effectiveQuery.groupBy,
+      queryExtra
+    );
+    const collapsedFilter = this.buildCollapsedGroupFilter(
+      table,
+      effectiveQuery.groupBy,
+      computedGroupExtra?.groupPoints,
+      effectiveQuery.collapsedGroupIds
+    );
+    if (collapsedFilter) {
+      const filteredResult = await this.executeListTableRecordsQuery(
+        {
+          ...listInput,
+          filter: normalizedFilter
+            ? { conjunction: 'and', items: [normalizedFilter, collapsedFilter] }
+            : collapsedFilter,
+          includeTotal: false,
+        },
+        context,
+        queryBus,
+        {
+          queryScope,
+          ...(recordSearchAccessPath ? { recordSearchAccessPath } : {}),
+          includeGroupMetadata: false,
+        }
+      );
+      listResult = {
+        ...filteredResult,
+        total: listResult.total,
+        groups: listResult.groups,
+      };
     }
 
-    const recordIds = orderedRecords.map((record) => record.id);
-    const snapshots = await this.withRecordReadSpan(
+    if (listResult.records.length === 0) {
+      return {
+        result: queryExtra ? { records: [], extra: queryExtra } : { records: [] },
+        versionByRecordId: new Map(),
+      };
+    }
+    const versionByRecordId = new Map(
+      listResult.records.map((record) => [record.id, record.version] as const)
+    );
+
+    const primaryFieldId = table.primaryFieldId().toString();
+    const primaryField = table.getField((field) => field.id().toString() === primaryFieldId);
+    const primaryFormatter = primaryField.isOk()
+      ? this.createDisplayFieldInstance(primaryField.value)
+      : undefined;
+    let records = this.withRecordReadSyncSpan(
       context,
-      'teable.RecordOpenApiV2Service.snapshotBulk',
+      'teable.RecordOpenApiV2Service.mapReadModels',
       {
-        'record.read.record_count': recordIds.length,
-        'record.read.has_snapshot_projection': Boolean(snapshotProjection),
+        'record.read.record_count': listResult.records.length,
+        'record.read.field_key_type': requestedFieldKeyType,
       },
       () =>
-        this.withTableDataClient(tableId, () =>
-          this.recordService.getSnapshotBulkWithPermission(
-            tableId,
-            recordIds,
-            snapshotProjection,
+        listResult.records.map((record) =>
+          this.mapTableRecordReadModelToIRecord(
+            table,
+            record,
+            primaryFieldId,
             requestedFieldKeyType,
-            query.cellFormat,
-            true
+            primaryFormatter
           )
         )
     );
+    records = await this.hydrateLegacyUserCells(container, table, records, requestedFieldKeyType);
 
-    const records = this.withRecordReadSyncSpan(
-      context,
-      'teable.RecordOpenApiV2Service.orderSnapshots',
-      {
-        'record.read.record_count': recordIds.length,
-      },
-      () => {
-        if (snapshots.length !== recordIds.length) {
-          throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
-        }
-
-        const snapshotMap = new Map(
-          snapshots.map((snapshot) => [snapshot.data.id, snapshot.data as IRecord])
-        );
-        const records = recordIds
-          .map((recordId) => snapshotMap.get(recordId))
-          .filter((record): record is IRecord => Boolean(record));
-
-        if (records.length !== recordIds.length) {
-          throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
-        }
-
-        return records;
-      }
-    );
-
-    const normalizedRecords = await this.withRecordReadSpan(
+    let normalizedRecords = this.withRecordReadSyncSpan(
       context,
       'teable.RecordOpenApiV2Service.formatRecords',
       {
         'record.read.record_count': records.length,
         'record.read.sorted_field_count': sortWithGroupFallback?.length ?? 0,
+        'record.read.cell_format': query.cellFormat ?? CellFormat.Json,
       },
       () =>
-        this.formatSystemDatetimeFields(
-          tableId,
+        this.formatSystemDatetimeFieldsFromTable(
+          table,
           records,
           query.cellFormat,
           sortWithGroupFallback?.map((item) => item.fieldId)
         )
     );
 
-    return queryExtra
-      ? { records: normalizedRecords, extra: queryExtra }
-      : { records: normalizedRecords };
+    // Pure-V2 presentation: no FieldService / RecordService. Attachment URLs
+    // via IAttachmentUrlSignerService + free-function presign helpers.
+    if (query.cellFormat === CellFormat.Text) {
+      normalizedRecords = this.formatRecordFieldsAsDisplayText(
+        table,
+        normalizedRecords,
+        requestedFieldKeyType
+      );
+    } else {
+      normalizedRecords = await this.presignAttachmentFieldsFromTable(
+        container,
+        table,
+        normalizedRecords,
+        requestedFieldKeyType
+      );
+    }
+
+    return {
+      result: queryExtra
+        ? { records: normalizedRecords, extra: queryExtra }
+        : { records: normalizedRecords },
+      versionByRecordId,
+    };
+  }
+
+  private mergeQueryExtra(
+    groupExtra: IRecordsVo['extra'] | undefined,
+    otherExtra: IRecordsVo['extra'] | undefined
+  ): IRecordsVo['extra'] | undefined {
+    if (!groupExtra && !otherExtra) return undefined;
+    return {
+      ...(otherExtra?.searchHitIndex !== undefined
+        ? { searchHitIndex: otherExtra.searchHitIndex }
+        : groupExtra
+          ? { searchHitIndex: null }
+          : {}),
+      ...(groupExtra?.groupPoints !== undefined ? { groupPoints: groupExtra.groupPoints } : {}),
+      ...(groupExtra?.allGroupHeaderRefs !== undefined
+        ? { allGroupHeaderRefs: groupExtra.allGroupHeaderRefs }
+        : {}),
+    };
+  }
+
+  private buildGroupQueryExtra(
+    table: Table,
+    groupBy: IGetRecordsRo['groupBy'],
+    groups: ReadonlyArray<ITableRecordGroup> | undefined,
+    rowCount: number,
+    collapsedGroupIds?: ReadonlyArray<string>
+  ): IRecordsVo['extra'] | undefined {
+    if (!groupBy?.length) return undefined;
+
+    const collapsed = new Set(collapsedGroupIds ?? []);
+    const groupPoints: IGroupPoint[] = [];
+    const allGroupHeaderRefs: IGroupHeaderRef[] = [];
+    let previousValues: unknown[] = [];
+    let collapsedDepth = Number.MAX_SAFE_INTEGER;
+    let groupedRowCount = 0;
+
+    for (const group of groups ?? []) {
+      for (let depth = 0; depth < groupBy.length; depth += 1) {
+        const fieldId = groupBy[depth]!.fieldId;
+        const value = group.fields[fieldId] ?? null;
+        const outputValue = this.normalizeGroupPointValue(table, fieldId, value);
+        const comparable = convertValueToStringify(
+          this.groupPointIdentityValue(table, fieldId, value, outputValue)
+        );
+        if (previousValues[depth] === comparable) continue;
+
+        const groupId = String(
+          string2Hash(`${fieldId}_${[...previousValues.slice(0, depth), comparable].join('_')}`)
+        );
+        allGroupHeaderRefs.push({ id: groupId, depth });
+        if (depth > collapsedDepth) break;
+
+        collapsedDepth = Number.MAX_SAFE_INTEGER;
+        previousValues[depth] = comparable;
+        previousValues = previousValues.slice(0, depth + 1);
+        const isCollapsed = collapsed.has(groupId);
+        groupPoints.push({
+          id: groupId,
+          type: GroupPointType.Header,
+          depth,
+          value: outputValue,
+          isCollapsed,
+        });
+        if (isCollapsed) collapsedDepth = depth;
+      }
+
+      groupedRowCount += group.count;
+      if (collapsedDepth === Number.MAX_SAFE_INTEGER) {
+        groupPoints.push({ type: GroupPointType.Row, count: group.count });
+      }
+    }
+
+    if (groupedRowCount < rowCount) {
+      groupPoints.push(
+        {
+          id: 'unknown',
+          type: GroupPointType.Header,
+          depth: 0,
+          value: 'Unknown',
+          isCollapsed: false,
+        },
+        { type: GroupPointType.Row, count: rowCount - groupedRowCount }
+      );
+    }
+
+    return { groupPoints, allGroupHeaderRefs };
+  }
+
+  private normalizeGroupPointValue(table: Table, fieldId: string, value: unknown): unknown {
+    if (value instanceof Date) return value.toISOString();
+    const field = table.getField((candidate) => candidate.id().toString() === fieldId);
+    if (field.isErr()) {
+      return value;
+    }
+    if (this.presentationFieldType(field.value) === V2FieldType.checkbox().toString()) {
+      return value ?? null;
+    }
+    if (this.isPublicUserValueField(field.value)) {
+      return this.normalizeGroupUserValue(value);
+    }
+    return value;
+  }
+
+  private groupPointIdentityValue(
+    table: Table,
+    fieldId: string,
+    storedValue: unknown,
+    outputValue: unknown
+  ): unknown {
+    const field = table.getField((candidate) => candidate.id().toString() === fieldId);
+    if (field.isErr() || !this.isPublicUserValueField(field.value)) {
+      return storedValue;
+    }
+    return this.userGroupIdentityValue(outputValue);
+  }
+
+  private userGroupIdentityValue(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.userGroupIdentityValue(item));
+    }
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+    const user = value as Record<string, unknown>;
+    return {
+      id: user.id,
+      title: user.title,
+    };
+  }
+
+  private normalizeGroupUserValue(
+    value: unknown,
+    resolvedUsers: ReadonlyMap<string, { id: string; title: string; email?: string }> = new Map()
+  ): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.normalizeGroupUserValue(item, resolvedUsers));
+    }
+    const normalized = this.normalizePublicUserValue(value, resolvedUsers);
+    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+      return normalized;
+    }
+    const groupValue = { ...(normalized as Record<string, unknown>) };
+    delete groupValue.email;
+    return groupValue;
+  }
+
+  private async hydrateLegacyUserGroupExtra(
+    container: DependencyContainer,
+    table: Table,
+    groupBy: IGetRecordsRo['groupBy'],
+    extra: IRecordsVo['extra'] | undefined
+  ): Promise<IRecordsVo['extra'] | undefined> {
+    if (!extra?.groupPoints?.length || !groupBy?.length) {
+      return extra;
+    }
+
+    const userGroupDepths = new Set(
+      groupBy.flatMap((item, depth) => {
+        const field = table.getField((candidate) => candidate.id().toString() === item.fieldId);
+        return field.isOk() && this.isPublicUserValueField(field.value) ? [depth] : [];
+      })
+    );
+    if (!userGroupDepths.size) {
+      return extra;
+    }
+
+    const userIds = new Set<string>();
+    for (const point of extra.groupPoints) {
+      if (
+        point.type === GroupPointType.Header &&
+        point.id !== 'unknown' &&
+        userGroupDepths.has(point.depth)
+      ) {
+        this.collectGroupUserIds(point.value, userIds);
+      }
+    }
+    if (!userIds.size) {
+      return extra;
+    }
+
+    const resolvedUsers = await this.resolvePublicUsers(container, userIds);
+    return {
+      ...extra,
+      groupPoints: extra.groupPoints.map((point) =>
+        point.type === GroupPointType.Header &&
+        point.id !== 'unknown' &&
+        userGroupDepths.has(point.depth)
+          ? { ...point, value: this.normalizeGroupUserValue(point.value, resolvedUsers) }
+          : point
+      ),
+    };
+  }
+
+  private async presignAttachmentGroupExtra(
+    container: DependencyContainer,
+    table: Table,
+    groupBy: IGetRecordsRo['groupBy'],
+    extra: IRecordsVo['extra'] | undefined
+  ): Promise<IRecordsVo['extra'] | undefined> {
+    if (
+      !extra?.groupPoints?.length ||
+      !groupBy?.length ||
+      !container.isRegistered(v2CoreTokens.attachmentUrlSignerService)
+    ) {
+      return extra;
+    }
+
+    const attachmentFieldIds = new Set(
+      table
+        .getFields()
+        .filter((field) => this.isAttachmentValueField(field))
+        .map((field) => field.id().toString())
+    );
+    const headerInputs = extra.groupPoints.flatMap((point, pointIndex) => {
+      if (point.type !== GroupPointType.Header || point.id === 'unknown') return [];
+      const fieldId = groupBy[point.depth]?.fieldId;
+      return fieldId && attachmentFieldIds.has(fieldId)
+        ? [{ pointIndex, fieldId, fields: { [fieldId]: point.value } }]
+        : [];
+    });
+    if (!headerInputs.length) return extra;
+
+    const signer = container.resolve<IAttachmentUrlSignerService>(
+      v2CoreTokens.attachmentUrlSignerService
+    );
+    const signedResult = await presignAttachmentFieldMaps(
+      headerInputs.map((input) => input.fields),
+      attachmentFieldIds,
+      signer
+    );
+    if (signedResult.isErr()) return extra;
+
+    const signedValueByPointIndex = new Map(
+      headerInputs.map((input, index) => [
+        input.pointIndex,
+        signedResult.value[index]?.[input.fieldId],
+      ])
+    );
+    return {
+      ...extra,
+      groupPoints: extra.groupPoints.map((point, pointIndex) =>
+        signedValueByPointIndex.has(pointIndex) && point.type === GroupPointType.Header
+          ? { ...point, value: signedValueByPointIndex.get(pointIndex) }
+          : point
+      ),
+    };
+  }
+
+  private buildCollapsedGroupFilter(
+    table: Table,
+    groupBy: IGetRecordsRo['groupBy'],
+    groupPoints: ReadonlyArray<IGroupPoint> | null | undefined,
+    collapsedGroupIds?: ReadonlyArray<string>
+  ): RecordFilter | undefined {
+    if (!groupBy?.length || !groupPoints?.length || !collapsedGroupIds?.length) {
+      return undefined;
+    }
+
+    const pathValues: unknown[] = [];
+    const pathByHeaderId = new Map<string, unknown[]>();
+    for (const point of groupPoints) {
+      if (point.type !== GroupPointType.Header || point.id === 'unknown') continue;
+      pathValues.length = point.depth;
+      pathValues[point.depth] = point.value;
+      pathByHeaderId.set(point.id, [...pathValues]);
+    }
+
+    // V1 parity: each collapsed group is excluded with an OR of per-depth
+    // null-inclusive negations (isNot/isNotEmpty/isNotExactly, exactFormatDate
+    // for dates), so rows in the empty bucket stay visible and date buckets
+    // match the field's formatting granularity. Plain not+is would drop
+    // NULL-valued rows (three-valued NOT).
+    const filterFieldCache = new Map<string, IFieldInstance | undefined>();
+    const resolveFilterField = (fieldId: string): IFieldInstance | undefined => {
+      if (!filterFieldCache.has(fieldId)) {
+        const field = table.getField((candidate) => candidate.id().toString() === fieldId);
+        filterFieldCache.set(
+          fieldId,
+          field.isOk() ? this.createDisplayFieldInstance(field.value) : undefined
+        );
+      }
+      return filterFieldCache.get(fieldId);
+    };
+
+    const exclusions: IFilterSet[] = [];
+    for (const collapsedId of collapsedGroupIds) {
+      const path = pathByHeaderId.get(collapsedId);
+      if (!path) continue;
+      const innerFilterSet: IFilterSet = { conjunction: 'or', filterSet: [] };
+      for (let depth = 0; depth < path.length; depth += 1) {
+        const fieldId = groupBy[depth]?.fieldId;
+        if (!fieldId) continue;
+        const field = resolveFilterField(fieldId);
+        if (!field) continue;
+        innerFilterSet.filterSet.push(generateFilterItem(field, path[depth] ?? null));
+      }
+      if (!innerFilterSet.filterSet.length) continue;
+      exclusions.push(innerFilterSet);
+    }
+
+    if (!exclusions.length) return undefined;
+    const v1Filter: IFilterSet = { conjunction: 'and', filterSet: exclusions };
+    return this.normalizeFilterForV2FromTable(table, v1Filter) ?? undefined;
+  }
+
+  async getSocketDocIds(
+    tableId: string,
+    query: IGetRecordsRo
+  ): Promise<{ ids: string[]; extra?: IRecordsVo['extra'] }> {
+    this.assertValidListQuery(query);
+
+    const container = await this.v2ContainerService.getContainerForTable(tableId);
+    const context = await this.v2ContextFactory.createContext(container);
+    const table = await this.loadV2Table(context, container, tableId);
+    const queryScope = await this.prepareRecordQueryScope(context, container, table, {
+      kind: RecordQueryOperationKind.list,
+      viewId: query.viewId,
+      ignoreViewQuery: query.ignoreViewQuery,
+      limit: query.take,
+      offset: query.skip,
+      keepPrimaryKey: Boolean(query.filterLinkCellSelected),
+    });
+    if (this.shouldUseLegacyPermissionSocketQuery(table, query, queryScope)) {
+      const legacyResult = await this.withTableDataClient(tableId, () =>
+        this.recordService.getDocIdsByQuery(
+          tableId,
+          {
+            ...query,
+            fieldKeyType: FieldKeyType.Id,
+            ignoreViewQuery: query.ignoreViewQuery ?? false,
+          },
+          true
+        )
+      );
+      if (!legacyResult.ids.length) {
+        return legacyResult.extra ? { ids: [], extra: legacyResult.extra } : { ids: [] };
+      }
+
+      // The legacy query supplies mask-aware order/group/search semantics. V2
+      // still revalidates membership through the merged plugin scope. If the
+      // compatibility contract is ever wrong, omit legacy aggregates rather
+      // than expose structure for rows rejected by V2.
+      const { result: scopedResult } = await this.getRecordsWithPreparedScope(
+        tableId,
+        {
+          selectedRecordIds: legacyResult.ids,
+          take: legacyResult.ids.length,
+          skip: 0,
+          projection: [],
+          fieldKeyType: FieldKeyType.Id,
+          cellFormat: CellFormat.Json,
+          ignoreViewQuery: true,
+          includeQueryExtra: false,
+        },
+        queryScope,
+        container,
+        context,
+        table,
+        { projectionFieldIds: [] }
+      );
+      const scopedIds = new Set(scopedResult.records.map((record) => record.id));
+      const ids = legacyResult.ids.filter((recordId) => scopedIds.has(recordId));
+      const allIdsRevalidated = ids.length === legacyResult.ids.length;
+      return legacyResult.extra && allIdsRevalidated ? { ids, extra: legacyResult.extra } : { ids };
+    }
+
+    const { result } = await this.getRecordsWithPreparedScope(
+      tableId,
+      {
+        ...query,
+        fieldKeyType: FieldKeyType.Id,
+        cellFormat: CellFormat.Json,
+      },
+      queryScope,
+      container,
+      context,
+      table,
+      { projectionFieldIds: [] }
+    );
+    return result.extra
+      ? { ids: result.records.map((record) => record.id), extra: result.extra }
+      : { ids: result.records.map((record) => record.id) };
+  }
+
+  private shouldUseLegacyPermissionSocketQuery(
+    table: Table,
+    query: IGetRecordsRo,
+    queryScope: RecordQueryPluginScope | undefined
+  ): boolean {
+    if (queryScope?.legacyPermissionQueryCompatible !== true) {
+      return false;
+    }
+
+    const needsLegacyExtra = query.includeQueryExtra !== false && Boolean(query.search);
+    if (needsLegacyExtra) {
+      return true;
+    }
+
+    const maskedFieldIds = new Set(queryScope.fieldMasks?.map((mask) => mask.fieldId) ?? []);
+    if (!maskedFieldIds.size) {
+      return false;
+    }
+    if (query.search) {
+      return true;
+    }
+
+    const orderBy = this.resolveSortGroupFieldKeysToIds(table, query.orderBy ?? undefined);
+    const groupBy = this.resolveSortGroupFieldKeysToIds(table, query.groupBy ?? undefined);
+    return [...(orderBy ?? []), ...(groupBy ?? [])].some((item) =>
+      maskedFieldIds.has(item.fieldId)
+    );
+  }
+
+  async getSocketSnapshotBulk(
+    tableId: string,
+    recordIds: string[],
+    projection?: { [fieldNameOrId: string]: boolean }
+  ): Promise<ISnapshotBase<IRecord>[]> {
+    if (recordIds.length === 0) {
+      return [];
+    }
+
+    const requestedProjectionFieldIds = projection
+      ? Object.entries(projection)
+          .filter(([, included]) => included)
+          .map(([fieldId]) => fieldId)
+      : [];
+    const projectionFieldIds = requestedProjectionFieldIds.length
+      ? requestedProjectionFieldIds
+      : undefined;
+    const container = await this.v2ContainerService.getContainerForTable(tableId);
+    const context = await this.v2ContextFactory.createContext(container);
+    const table = await this.loadV2Table(context, container, tableId);
+    const queryScope = await this.prepareRecordQueryScope(context, container, table, {
+      kind: RecordQueryOperationKind.getByIds,
+      recordIds,
+      projectionFieldIds,
+      ignoreViewQuery: true,
+      // ShareDB query membership already scopes which ids are subscribed.
+      // Match the legacy snapshot reader: retain known documents for version
+      // continuity while the plugin still enforces non-primary field scope.
+      keepPrimaryKey: true,
+    });
+    const recordById = new Map<string, IRecord>();
+    const versionByRecordId = new Map<string, number>();
+    for (let index = 0; index < recordIds.length; index += maxResolveSelectionRecordIdsPageSize) {
+      const chunk = recordIds.slice(index, index + maxResolveSelectionRecordIdsPageSize);
+      const query = {
+        selectedRecordIds: chunk,
+        take: chunk.length,
+        skip: 0,
+        projection: projectionFieldIds,
+        fieldKeyType: FieldKeyType.Id,
+        cellFormat: CellFormat.Json,
+        ignoreViewQuery: true,
+        includeQueryExtra: false,
+      } satisfies IGetRecordsRo;
+      const page = await this.getRecordsWithPreparedScope(
+        tableId,
+        query,
+        queryScope,
+        container,
+        context,
+        table
+      );
+      for (const record of page.result.records) {
+        recordById.set(record.id, record);
+      }
+      for (const [recordId, version] of page.versionByRecordId) {
+        versionByRecordId.set(recordId, version);
+      }
+    }
+
+    return recordIds.flatMap((recordId) => {
+      const record = recordById.get(recordId);
+      const version = versionByRecordId.get(recordId);
+      if (!record || version == null) {
+        return [];
+      }
+      return [
+        {
+          id: recordId,
+          v: version,
+          type: 'json0',
+          data: record,
+        },
+      ];
+    });
+  }
+
+  async getRecord(
+    tableId: string,
+    recordId: string,
+    query: {
+      projection?: string[];
+      cellFormat?: CellFormat;
+      fieldKeyType?: FieldKeyType;
+    }
+  ): Promise<IRecord> {
+    // Use getOne plugin kind so plugins that only support getOne (or apply a
+    // stricter getOne policy) are not skipped by hard-coding list.
+    const container = await this.v2ContainerService.getContainerForTable(tableId);
+    const context = await this.v2ContextFactory.createContext(container);
+    const table = await this.loadV2Table(context, container, tableId);
+    const queryScope = await this.prepareRecordQueryScope(context, container, table, {
+      kind: RecordQueryOperationKind.getOne,
+      recordId,
+      projectionFieldIds: query.projection,
+      ignoreViewQuery: true,
+    });
+
+    const listQuery = {
+      selectedRecordIds: [recordId],
+      take: 1,
+      skip: 0,
+      projection: query.projection,
+      cellFormat: query.cellFormat,
+      fieldKeyType: query.fieldKeyType ?? FieldKeyType.Name,
+      ignoreViewQuery: true,
+    } satisfies IGetRecordsRo;
+
+    const result = await this.getRecordsWithPreparedScope(
+      tableId,
+      listQuery,
+      queryScope,
+      container,
+      context,
+      table
+    );
+    if (result.result.records[0]) {
+      return result.result.records[0];
+    }
+
+    // Authority-matrix parity: if the row exists but is outside recordSpec,
+    // return 403 (not 404). EE AuthorityGuard often catches this first; this
+    // covers internal/delegated paths and defense in depth.
+    const existsOutsideScope = await this.probeRecordExistsOutsideDiscretionaryRowFilter(
+      tableId,
+      recordId,
+      queryScope,
+      container,
+      context,
+      table
+    );
+    if (existsOutsideScope) {
+      throw new CustomHttpException(
+        `Record permission not allowed: record|read`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.notAllowedOperationRecord',
+          },
+        }
+      );
+    }
+
+    throw new CustomHttpException('Record not found', HttpErrorCode.NOT_FOUND, {
+      localization: { i18nKey: 'httpErrors.record.notFound' },
+    });
   }
 
   async resolveRecordIdsBySelection(
@@ -504,40 +1220,397 @@ export class RecordOpenApiV2Service {
     });
   }
 
-  private async formatSystemDatetimeFields(
-    tableId: string,
+  /**
+   * Sign attachment download/preview URLs for pure-V2 JSON responses.
+   *
+   * Field discovery: V2 table aggregate. Signing: v2-core free function
+   * {@link presignAttachmentFieldMaps} + container {@link IAttachmentUrlSignerService}
+   * (Nest adapter looks up thumbnails and storage URLs). No RecordService.
+   */
+  private async presignAttachmentFieldsFromTable(
+    container: DependencyContainer,
+    table: Table,
+    records: IRecord[],
+    fieldKeyType: FieldKeyType
+  ): Promise<IRecord[]> {
+    if (!records.length) {
+      return records;
+    }
+    if (!container.isRegistered(v2CoreTokens.attachmentUrlSignerService)) {
+      return records;
+    }
+
+    const attachmentFieldKeys = new Set(
+      table
+        .getFields()
+        .filter((field) => this.isAttachmentValueField(field))
+        .map((field) => this.resolveResponseFieldKey(table, field.id().toString(), fieldKeyType))
+    );
+    if (!attachmentFieldKeys.size) {
+      return records;
+    }
+
+    const signer = container.resolve<IAttachmentUrlSignerService>(
+      v2CoreTokens.attachmentUrlSignerService
+    );
+    const signedFieldsResult = await presignAttachmentFieldMaps(
+      records.map((record) => record.fields),
+      attachmentFieldKeys,
+      signer
+    );
+    if (signedFieldsResult.isErr()) {
+      // Fail closed on presentation: return unsigned cells rather than 500 the list.
+      return records;
+    }
+
+    const signedFieldMaps = signedFieldsResult.value;
+    return records.map((record, index) => ({
+      ...record,
+      fields: signedFieldMaps[index] ?? record.fields,
+    }));
+  }
+
+  private isAttachmentValueField(field: V2Field): boolean {
+    return this.presentationFieldType(field) === 'attachment';
+  }
+
+  private presentationField(field: V2Field): V2Field {
+    const fieldType = field.type().toString();
+    if (fieldType !== 'lookup' && fieldType !== 'conditionalLookup') {
+      return field;
+    }
+    const innerField =
+      fieldType === 'lookup'
+        ? (field as LookupField).innerField()
+        : (field as ConditionalLookupField).innerField();
+    return innerField.isOk() ? this.presentationField(innerField.value) : field;
+  }
+
+  private presentationFieldType(field: V2Field): string {
+    return this.presentationField(field).type().toString();
+  }
+
+  private isPublicUserValueField(field: V2Field): boolean {
+    return publicUserFieldTypes.has(this.presentationFieldType(field));
+  }
+
+  private async hydrateLegacyUserCells(
+    container: DependencyContainer,
+    table: Table,
+    records: IRecord[],
+    fieldKeyType: FieldKeyType
+  ): Promise<IRecord[]> {
+    const userFields = table
+      .getFields()
+      .filter((field) => this.isPublicUserValueField(field))
+      .map((field) => ({
+        key: this.resolveResponseFieldKey(table, field.id().toString(), fieldKeyType),
+        shouldResolveUser: this.presentationFieldType(field) !== 'lastModifiedBy',
+      }));
+    if (!userFields.length || !records.length) {
+      return records;
+    }
+
+    const userFieldKeys = new Set(
+      userFields.filter((field) => field.shouldResolveUser).map((field) => field.key)
+    );
+
+    const userIds = new Set<string>();
+    for (const record of records) {
+      for (const key of userFieldKeys) {
+        this.collectLegacyUserIds(record.fields[key], userIds);
+      }
+    }
+    const resolvedUsers = userIds.size
+      ? await this.resolvePublicUsers(container, userIds)
+      : new Map<string, { id: string; title: string; email?: string }>();
+    const unresolvedUsers = new Map<string, { id: string; title: string; email?: string }>();
+
+    return records.map((record) => {
+      const fields = { ...record.fields };
+      for (const field of userFields) {
+        if (field.key in fields) {
+          fields[field.key] = this.normalizePublicUserValue(
+            fields[field.key],
+            field.shouldResolveUser ? resolvedUsers : unresolvedUsers
+          );
+        }
+      }
+      return { ...record, fields };
+    });
+  }
+
+  private collectLegacyUserIds(value: unknown, target: Set<string>): void {
+    if (typeof value === 'string') {
+      if (value.startsWith('usr')) target.add(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => this.collectLegacyUserIds(item, target));
+      return;
+    }
+    if (value && typeof value === 'object') {
+      const id = (value as { id?: unknown }).id;
+      if (typeof id === 'string' && id.startsWith('usr')) target.add(id);
+    }
+  }
+
+  private collectGroupUserIds(value: unknown, target: Set<string>): void {
+    this.collectLegacyUserIds(value, target);
+    if (Array.isArray(value)) {
+      value.forEach((item) => this.collectGroupUserIds(item, target));
+      return;
+    }
+    if (value && typeof value === 'object') {
+      const id = (value as { id?: unknown }).id;
+      if (typeof id === 'string' && id.startsWith('usr')) target.add(id);
+    }
+  }
+
+  private async resolvePublicUsers(
+    container: DependencyContainer,
+    userIds: ReadonlySet<string>
+  ): Promise<Map<string, { id: string; title: string; email?: string }>> {
+    const resolvedUsers = new Map<string, { id: string; title: string; email?: string }>();
+    if (!container.isRegistered(v2CoreTokens.userLookupService)) {
+      return resolvedUsers;
+    }
+    try {
+      const lookup = container.resolve<IUserLookupService>(v2CoreTokens.userLookupService);
+      const result = await lookup.listUsersByIdentifiers([...userIds]);
+      if (result.isOk()) {
+        for (const user of result.value) {
+          resolvedUsers.set(user.id, {
+            id: user.id,
+            title: user.name,
+            ...(user.email ? { email: user.email } : {}),
+          });
+        }
+      }
+    } catch {
+      // Keep the public user-cell shape even when optional enrichment fails.
+    }
+    return resolvedUsers;
+  }
+
+  private normalizePublicUserValue(
+    value: unknown,
+    resolvedUsers: ReadonlyMap<string, { id: string; title: string; email?: string }>
+  ): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.normalizePublicUserValue(item, resolvedUsers));
+    }
+
+    const id =
+      typeof value === 'string'
+        ? value
+        : value && typeof value === 'object'
+          ? (value as { id?: unknown }).id
+          : undefined;
+    if (typeof id !== 'string' || !id.startsWith('usr')) {
+      return value;
+    }
+
+    const resolved = resolvedUsers.get(id);
+    const existing = value && typeof value === 'object' ? value : {};
+    return {
+      ...existing,
+      id,
+      title:
+        resolved?.title ??
+        (typeof (existing as { title?: unknown }).title === 'string'
+          ? (existing as { title: string }).title
+          : id),
+      ...(resolved?.email ? { email: resolved.email } : {}),
+      avatarUrl: buildUserAvatarUrl(id),
+    };
+  }
+
+  /**
+   * Pure-V2 CellFormat.Text mapping from already-resolved cell values.
+   * Prefer structural title/name for link/user cells; never "[object Object]".
+   * Does not load V1 FieldService.
+   */
+  private formatRecordFieldsAsDisplayText(
+    table: Table,
+    records: IRecord[],
+    fieldKeyType: FieldKeyType
+  ): IRecord[] {
+    if (!records.length) {
+      return records;
+    }
+
+    const formatterByKey = new Map<string, IFieldInstance>();
+    for (const field of table.getFields()) {
+      const formatter = this.createDisplayFieldInstance(field);
+      if (formatter) {
+        formatterByKey.set(
+          this.resolveResponseFieldKey(table, field.id().toString(), fieldKeyType),
+          formatter
+        );
+      }
+    }
+    const primaryKey = this.resolveResponseFieldKey(
+      table,
+      table.primaryFieldId().toString(),
+      fieldKeyType
+    );
+
+    return records.map((record) => {
+      const nextFields: IRecord['fields'] = {};
+      for (const [key, value] of Object.entries(record.fields)) {
+        if (value == null) {
+          continue;
+        }
+        nextFields[key] = this.formatCellValueWithField(formatterByKey.get(key), value);
+      }
+      return {
+        ...record,
+        fields: nextFields,
+        name:
+          primaryKey in record.fields
+            ? this.formatCellValueWithField(
+                formatterByKey.get(primaryKey),
+                record.fields[primaryKey]
+              )
+            : this.primaryValueToRecordName(record.name),
+      };
+    });
+  }
+
+  private createDisplayFieldInstance(
+    field: ReturnType<Table['getFields']>[number]
+  ): IFieldInstance | undefined {
+    const presentationField = this.presentationField(field);
+    const valueTypeResult = field.accept(new FieldValueTypeVisitor());
+    const optionsResult = presentationField.accept(new FieldOptionsDtoVisitor());
+    if (valueTypeResult.isErr() || optionsResult.isErr()) {
+      return undefined;
+    }
+
+    const type = presentationField.type().toString() as FieldType;
+    const cellValueType = this.cellValueTypeFromV2ValueType(
+      valueTypeResult.value.cellValueType.toString()
+    );
+    const isMultipleCellValue = valueTypeResult.value.isMultipleCellValue.toBoolean();
+    try {
+      return createFieldInstanceByVo({
+        id: field.id().toString(),
+        dbFieldName: field.id().toString(),
+        name: field.name().toString(),
+        type,
+        options:
+          optionsResult.value && typeof optionsResult.value === 'object'
+            ? (optionsResult.value as IFieldVo['options'])
+            : {},
+        cellValueType,
+        isMultipleCellValue,
+        dbFieldType: getDbFieldType(type, cellValueType, isMultipleCellValue),
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private formatCellValueWithField(field: IFieldInstance | undefined, value: unknown): string {
+    if (field) {
+      try {
+        return field.cellValue2String(value) ?? '';
+      } catch {
+        // Malformed legacy cells should not fail the entire records endpoint.
+      }
+    }
+    return this.cellValueToDisplayText(value);
+  }
+
+  private primaryValueToRecordName(value: unknown): string {
+    if (value == null) {
+      return '';
+    }
+    if (typeof value === 'string') {
+      return value;
+    }
+    return this.cellValueToDisplayText(value);
+  }
+
+  private cellValueToDisplayText(value: unknown): string {
+    if (value == null) {
+      return '';
+    }
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => this.cellValueToDisplayText(entry))
+        .filter((entry) => entry.length > 0)
+        .join(', ');
+    }
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      if (typeof obj.title === 'string') {
+        return obj.title;
+      }
+      if (typeof obj.name === 'string') {
+        return obj.name;
+      }
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
+    return String(value);
+  }
+
+  /**
+   * Format top-level system datetime fields using V2 table aggregate field defs
+   * (CreatedTime / LastModifiedTime formatting), not FieldService.
+   */
+  private formatSystemDatetimeFieldsFromTable(
+    table: Table,
     records: IRecord[],
     cellFormat?: CellFormat,
     sortedFieldIds?: ReadonlyArray<string>
-  ): Promise<IRecord[]> {
+  ): IRecord[] {
     if (!records.length || cellFormat === CellFormat.Text || !sortedFieldIds?.length) {
       return records;
     }
 
     const sortedFieldIdSet = new Set(sortedFieldIds);
-    const fields = await this.fieldService.getFieldsByQuery(tableId, {
-      projection: Array.from(sortedFieldIdSet),
-    });
-    const formatters = fields.flatMap((field) => {
-      if (!sortedFieldIdSet.has(field.id)) {
+    const formatters = table.getFields().flatMap((field) => {
+      const fieldId = field.id().toString();
+      if (!sortedFieldIdSet.has(fieldId)) {
         return [];
       }
-      if (field.type !== FieldType.CreatedTime && field.type !== FieldType.LastModifiedTime) {
+      const fieldType = field.type().toString();
+      if (fieldType !== 'createdTime' && fieldType !== 'lastModifiedTime') {
         return [];
       }
-
-      const formatting = this.extractDatetimeFormatting(field.options);
-      if (!formatting || formatting.time !== TimeFormatting.None) {
+      const formattingDto =
+        'formatting' in field && typeof field.formatting === 'function'
+          ? (
+              field as {
+                formatting: () => { toDto: () => IDatetimeFormatting };
+              }
+            )
+              .formatting()
+              .toDto()
+          : undefined;
+      if (!formattingDto || formattingDto.time !== TimeFormatting.None) {
         return [];
       }
-
       return [
         {
           topLevelKey:
-            field.type === FieldType.CreatedTime
-              ? ('createdTime' as const)
-              : ('lastModifiedTime' as const),
-          formatting,
+            fieldType === 'createdTime' ? ('createdTime' as const) : ('lastModifiedTime' as const),
+          formatting: formattingDto,
         },
       ];
     });
@@ -608,7 +1681,11 @@ export class RecordOpenApiV2Service {
       return explicitProjection;
     }
 
-    if (enabledFieldIds?.length) {
+    // undefined = unrestricted; empty array = no user fields (deny-all).
+    if (enabledFieldIds != null) {
+      if (!enabledFieldIds.length) {
+        return {};
+      }
       if (fieldKeyType === FieldKeyType.Id) {
         return this.toProjectionMap(enabledFieldIds);
       }
@@ -657,6 +1734,7 @@ export class RecordOpenApiV2Service {
     context: IExecutionContext,
     queryBus: IQueryBus,
     options?: {
+      queryScope?: RecordQueryPluginScope;
       recordReadQuerySource?: IRecordReadQuerySource;
       recordSearchAccessPath?: IRecordSearchAccessPath;
     }
@@ -675,37 +1753,436 @@ export class RecordOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
   }
 
-  private async createV2ReadContext(
-    tableId: string,
-    query: Pick<IGetRecordsRo, 'viewId' | 'ignoreViewQuery' | 'filterLinkCellSelected'>,
-    container: DependencyContainer
-  ): Promise<{
-    context: IExecutionContext;
-    recordReadQuerySource?: IRecordReadQuerySource;
-  }> {
-    const context = await this.v2ContextFactory.createContext(container);
-    const readSource = await this.recordPermissionService.getReadQuerySource(tableId, {
-      viewId: query.viewId,
-      keepPrimaryKey: Boolean(query.filterLinkCellSelected),
-    });
-    if (!readSource) {
-      return { context };
+  /**
+   * Pure-V2 list path: executes ListTableRecordsQuery and returns full read models
+   * (including system columns) without the HTTP DTO strip.
+   */
+  private async executeListTableRecordsQuery(
+    input: IListTableRecordsQueryInput,
+    context: IExecutionContext,
+    queryBus: IQueryBus,
+    options?: {
+      queryScope?: RecordQueryPluginScope;
+      recordSearchAccessPath?: IRecordSearchAccessPath;
+      includeGroupMetadata?: boolean;
+      groupLimit?: number;
     }
-    return {
+  ): Promise<{
+    records: ReadonlyArray<TableRecordReadModel>;
+    total: number;
+    groups?: ReadonlyArray<ITableRecordGroup>;
+  }> {
+    const queryResult = ListTableRecordsQuery.create(input, options);
+    if (queryResult.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(queryResult.error),
+        mapDomainErrorToHttpStatus(queryResult.error)
+      );
+    }
+
+    const result = await queryBus.execute<ListTableRecordsQuery, ListTableRecordsResult>(
       context,
-      recordReadQuerySource: {
-        tableName: readSource.tableName,
-        cteName: readSource.cteName,
-        cteSql: readSource.cteSql,
-        enabledFieldIds: readSource.enabledFieldIds,
-      },
+      queryResult.value
+    );
+    if (result.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(result.error),
+        mapDomainErrorToHttpStatus(result.error)
+      );
+    }
+
+    return {
+      records: result.value.records,
+      total: result.value.total,
+      ...(result.value.groups ? { groups: result.value.groups } : {}),
     };
+  }
+
+  private async loadV2Table(
+    context: IExecutionContext,
+    container: DependencyContainer,
+    tableId: string
+  ): Promise<Table> {
+    const tableIdResult = TableId.create(tableId);
+    if (tableIdResult.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(tableIdResult.error),
+        mapDomainErrorToHttpStatus(tableIdResult.error)
+      );
+    }
+    const tableRepository = container.resolve<ITableRepository>(v2CoreTokens.tableRepository);
+    const tableResult = await tableRepository.findOne(
+      context,
+      TableByIdSpec.create(tableIdResult.value)
+    );
+    if (tableResult.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(tableResult.error),
+        mapDomainErrorToHttpStatus(tableResult.error)
+      );
+    }
+    return tableResult.value;
+  }
+
+  /**
+   * Host-controlled existence probe for 403 vs 404 after a scoped getOne miss.
+   *
+   * Re-prepares plugins as **getOne** with `existenceProbe: true` so only plugins
+   * that honor that intent (authority matrix) drop their discretionary row filter.
+   * Other plugins keep their recordSpec. Never sets global skipRecordSpec on a
+   * pre-merged scope.
+   */
+  private async probeRecordExistsOutsideDiscretionaryRowFilter(
+    tableId: string,
+    recordId: string,
+    getOneScope: RecordQueryPluginScope | undefined,
+    container: DependencyContainer,
+    context: IExecutionContext,
+    table: Table
+  ): Promise<boolean> {
+    // No row filter was applied on the miss — cannot distinguish 403 vs 404.
+    if (!getOneScope?.recordSpec) {
+      return false;
+    }
+    const probeScope = await this.prepareRecordQueryScope(context, container, table, {
+      kind: RecordQueryOperationKind.getOne,
+      recordId,
+      ignoreViewQuery: true,
+      existenceProbe: true,
+    });
+    const queryBus = container.resolve<IQueryBus>(v2CoreTokens.queryBus);
+    const listResult = await this.executeListTableRecordsQuery(
+      {
+        tableId,
+        fieldKeyType: FieldKeyType.Id,
+        limit: 1,
+        offset: 0,
+        projection: [],
+        includeTotal: false,
+        selectedRecordIds: [recordId],
+        ignoreViewQuery: true,
+      },
+      context,
+      queryBus,
+      {
+        ...(probeScope ? { queryScope: probeScope } : {}),
+      }
+    );
+    return listResult.records.length > 0;
+  }
+
+  private async prepareRecordQueryScope(
+    context: IExecutionContext,
+    container: DependencyContainer,
+    table: Table,
+    payload:
+      | {
+          kind: typeof RecordQueryOperationKind.list;
+          viewId?: string;
+          ignoreViewQuery?: boolean;
+          limit?: number;
+          offset?: number;
+          projectionFieldIds?: ReadonlyArray<string>;
+          keepPrimaryKey?: boolean;
+        }
+      | {
+          kind: typeof RecordQueryOperationKind.getOne;
+          recordId: string;
+          viewId?: string;
+          ignoreViewQuery?: boolean;
+          projectionFieldIds?: ReadonlyArray<string>;
+          /** See RecordQueryGetOnePayload.existenceProbe */
+          existenceProbe?: boolean;
+        }
+      | {
+          kind: typeof RecordQueryOperationKind.getByIds;
+          recordIds: ReadonlyArray<string>;
+          viewId?: string;
+          ignoreViewQuery?: boolean;
+          projectionFieldIds?: ReadonlyArray<string>;
+          keepPrimaryKey?: boolean;
+        }
+  ): Promise<RecordQueryPluginScope | undefined> {
+    if (!container.isRegistered(v2CoreTokens.recordQueryPluginRunner)) {
+      return undefined;
+    }
+    const runner = container.resolve<RecordQueryPluginRunner>(v2CoreTokens.recordQueryPluginRunner);
+    const prepared =
+      payload.kind === RecordQueryOperationKind.getOne
+        ? await runner.prepare({
+            kind: RecordQueryOperationKind.getOne,
+            executionContext: context,
+            table,
+            payload: {
+              recordId: payload.recordId,
+              viewId: payload.viewId,
+              ignoreViewQuery: payload.ignoreViewQuery,
+              projectionFieldIds: payload.projectionFieldIds,
+              existenceProbe: payload.existenceProbe,
+            },
+          })
+        : payload.kind === RecordQueryOperationKind.getByIds
+          ? await runner.prepare({
+              kind: RecordQueryOperationKind.getByIds,
+              executionContext: context,
+              table,
+              payload: {
+                recordIds: payload.recordIds,
+                viewId: payload.viewId,
+                ignoreViewQuery: payload.ignoreViewQuery,
+                projectionFieldIds: payload.projectionFieldIds,
+                keepPrimaryKey: payload.keepPrimaryKey,
+              },
+            })
+          : await runner.prepare({
+              kind: RecordQueryOperationKind.list,
+              executionContext: context,
+              table,
+              payload: {
+                viewId: payload.viewId,
+                ignoreViewQuery: payload.ignoreViewQuery,
+                projectionFieldIds: payload.projectionFieldIds,
+                limit: payload.limit,
+                offset: payload.offset,
+                keepPrimaryKey: payload.keepPrimaryKey,
+              },
+            });
+    if (prepared.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(prepared.error),
+        mapDomainErrorToHttpStatus(prepared.error)
+      );
+    }
+    const execution = prepared.value;
+    const guardResult = await execution.guard();
+    if (guardResult.isErr()) {
+      const status = isForbiddenError(guardResult.error)
+        ? HttpStatus.FORBIDDEN
+        : mapDomainErrorToHttpStatus(guardResult.error);
+      throwV2Error(mapDomainErrorToHttpError(guardResult.error), status);
+    }
+    const scopeResult = execution.getScope();
+    if (scopeResult.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(scopeResult.error),
+        mapDomainErrorToHttpStatus(scopeResult.error)
+      );
+    }
+    return scopeResult.value;
+  }
+
+  /**
+   * Resolve list projection to field **ids** from the V2 table aggregate only.
+   *
+   * Projection keys may be ids, names, or dbFieldNames depending on
+   * `fieldKeyType` (EE `getProjectionWithPermission` often returns names).
+   * Always normalize to field ids before ListTableRecords.
+   */
+  private resolveListProjectionFieldIdsFromTable(
+    table: Table,
+    query: IGetRecordsRo,
+    enabledFieldIds?: ReadonlyArray<string>
+  ): string[] {
+    // Empty allow-list means no user fields (not unrestricted).
+    if (enabledFieldIds != null && enabledFieldIds.length === 0) {
+      return [];
+    }
+
+    const allowSet = enabledFieldIds != null ? new Set(enabledFieldIds) : undefined;
+    const intersectAllow = (ids: ReadonlyArray<string>) =>
+      allowSet ? ids.filter((id) => allowSet.has(id)) : [...ids];
+
+    const fieldKeyType = query.fieldKeyType ?? FieldKeyType.Name;
+    const explicitProjection = Array.isArray(query.projection)
+      ? query.projection.filter((key): key is string => typeof key === 'string' && key.length > 0)
+      : undefined;
+    if (explicitProjection?.length) {
+      const resolvedIds = this.resolveProjectionKeysToFieldIds(
+        table,
+        explicitProjection,
+        fieldKeyType
+      );
+      return intersectAllow(resolvedIds);
+    }
+
+    // Restricted role without client projection: allow-list *is* the projection
+    // (matrix already scoped to this table's fields).
+    if (allowSet) {
+      return [...allowSet];
+    }
+
+    if (query.viewId && !query.ignoreViewQuery) {
+      const visibleResult = table.getOrderedVisibleFieldIds(query.viewId);
+      if (visibleResult.isOk()) {
+        return visibleResult.value.map((fieldId) => fieldId.toString());
+      }
+      // View missing: fall through to all table fields.
+    }
+
+    return table.fieldIds().map((fieldId) => fieldId.toString());
+  }
+
+  /**
+   * Map projection keys (id / name / dbFieldName) to field ids via table aggregate.
+   */
+  private resolveProjectionKeysToFieldIds(
+    table: Table,
+    keys: ReadonlyArray<string>,
+    fieldKeyType: FieldKeyType
+  ): string[] {
+    if (fieldKeyType === FieldKeyType.Id || (fieldKeyType as string) === 'id') {
+      return [...keys];
+    }
+
+    const byName = new Map<string, string>();
+    const byDbName = new Map<string, string>();
+    for (const field of table.getFields()) {
+      const id = field.id().toString();
+      byName.set(field.name().toString(), id);
+      const dbResult = field.dbFieldName();
+      if (dbResult.isOk()) {
+        const valueResult = dbResult.value.value();
+        if (valueResult.isOk() && valueResult.value) {
+          byDbName.set(valueResult.value, id);
+        }
+      }
+    }
+
+    const resolved: string[] = [];
+    const seen = new Set<string>();
+    for (const key of keys) {
+      let fieldId: string | undefined;
+      if (fieldKeyType === FieldKeyType.Name || (fieldKeyType as string) === 'name') {
+        fieldId = byName.get(key) ?? (key.startsWith('fld') ? key : undefined);
+      } else {
+        fieldId = byDbName.get(key) ?? byName.get(key) ?? (key.startsWith('fld') ? key : undefined);
+      }
+      if (fieldId && !seen.has(fieldId)) {
+        seen.add(fieldId);
+        resolved.push(fieldId);
+      }
+    }
+    return resolved;
+  }
+
+  private mapTableRecordReadModelToIRecord(
+    table: Table,
+    record: TableRecordReadModel,
+    primaryFieldId: string,
+    fieldKeyType: FieldKeyType,
+    primaryFormatter: IFieldInstance | undefined
+  ): IRecord {
+    const rawFields = { ...record.fields };
+    for (const field of table.getFields()) {
+      const fieldId = field.id().toString();
+      if (rawFields[fieldId] != null) {
+        continue;
+      }
+      const fieldType = field.type().toString();
+      if (fieldType === 'createdBy' && record.createdBy) {
+        rawFields[fieldId] = this.systemAuditUserFallback(record.createdBy);
+      } else if (
+        fieldType === 'lastModifiedBy' &&
+        (field as LastModifiedByField).isTrackAll() &&
+        record.lastModifiedBy
+      ) {
+        rawFields[fieldId] = this.systemAuditUserFallback(record.lastModifiedBy);
+      }
+    }
+    // List returns id-keyed fields; remap using table aggregate (not FieldService).
+    const fields = this.remapRecordFieldsFromTable(table, rawFields, fieldKeyType);
+    const primaryKey = this.resolveResponseFieldKey(table, primaryFieldId, fieldKeyType);
+    const primaryValue = fields[primaryKey] ?? record.fields[primaryFieldId];
+    return {
+      id: record.id,
+      fields,
+      name: this.formatCellValueWithField(primaryFormatter, primaryValue),
+      autoNumber: record.autoNumber,
+      createdTime: record.createdTime,
+      lastModifiedTime: record.lastModifiedTime,
+      createdBy: record.createdBy,
+      lastModifiedBy: record.lastModifiedBy,
+    };
+  }
+
+  private systemAuditUserFallback(userId: string): {
+    id: string;
+    title: string;
+    avatarUrl: string;
+  } {
+    return {
+      id: userId,
+      title: userId,
+      avatarUrl: buildUserAvatarUrl(userId),
+    };
+  }
+
+  /**
+   * Remap id-keyed cell map to the requested OpenAPI fieldKeyType using the
+   * V2 table aggregate only (names / dbFieldNames live on domain fields).
+   *
+   * V1 parity: omit null/undefined cells (and unchecked checkbox `false`) so
+   * clients and e2e asserts see missing keys, not explicit nulls.
+   */
+  private remapRecordFieldsFromTable(
+    table: Table,
+    fields: Record<string, unknown>,
+    fieldKeyType: FieldKeyType
+  ): Record<string, unknown> {
+    const byId = new Map(table.getFields().map((field) => [field.id().toString(), field]));
+    const remapped: Record<string, unknown> = {};
+    for (const [fieldId, value] of Object.entries(fields)) {
+      if (value == null) {
+        continue;
+      }
+      const field = byId.get(fieldId);
+      // Unchecked checkbox is null in V1 JSON responses.
+      if (value === false && field?.type().toString() === 'checkbox') {
+        continue;
+      }
+      if (fieldKeyType === FieldKeyType.Id || (fieldKeyType as string) === 'id') {
+        remapped[fieldId] = value;
+        continue;
+      }
+      if (!field) {
+        remapped[fieldId] = value;
+        continue;
+      }
+      remapped[this.resolveResponseFieldKey(table, fieldId, fieldKeyType)] = value;
+    }
+    return remapped;
+  }
+
+  private resolveResponseFieldKey(
+    table: Table,
+    fieldId: string,
+    fieldKeyType: FieldKeyType
+  ): string {
+    if (fieldKeyType === FieldKeyType.Id || (fieldKeyType as string) === 'id') {
+      return fieldId;
+    }
+    const field = table.getFields().find((item) => item.id().toString() === fieldId);
+    if (!field) {
+      return fieldId;
+    }
+    if (fieldKeyType === FieldKeyType.Name || (fieldKeyType as string) === 'name') {
+      return field.name().toString();
+    }
+    // dbFieldName — fall back to name when physical name is unset.
+    const dbFieldNameResult = field.dbFieldName();
+    if (dbFieldNameResult.isOk()) {
+      const valueResult = dbFieldNameResult.value.value();
+      if (valueResult.isOk() && valueResult.value) {
+        return valueResult.value;
+      }
+    }
+    return field.name().toString();
   }
 
   private async resolveRecordSearchAccessPath(
@@ -734,25 +2211,40 @@ export class RecordOpenApiV2Service {
     );
   }
 
-  private sanitizeReadableSortAndGroup(
-    query: Pick<IGetRecordsRo, 'orderBy' | 'groupBy'>,
-    enabledFieldIds?: ReadonlyArray<string>
-  ): Pick<IGetRecordsRo, 'orderBy' | 'groupBy'> {
-    if (!enabledFieldIds?.length) {
-      return {
-        orderBy: query.orderBy,
-        groupBy: query.groupBy,
-      };
+  /**
+   * Resolve orderBy/groupBy field keys (name / dbFieldName / id) to field ids.
+   */
+  private resolveSortGroupFieldKeysToIds<
+    T extends { fieldId: string; order?: string } | { fieldId: string; order: string },
+  >(table: Table, items: ReadonlyArray<T> | undefined): T[] | undefined {
+    if (!items?.length) {
+      return items as T[] | undefined;
     }
-
-    const enabledFieldIdSet = new Set(enabledFieldIds);
-    const orderBy = query.orderBy?.filter((item) => enabledFieldIdSet.has(item.fieldId));
-    const groupBy = query.groupBy?.filter((item) => enabledFieldIdSet.has(item.fieldId));
-
-    return {
-      orderBy: orderBy?.length ? orderBy : undefined,
-      groupBy: groupBy?.length ? groupBy : undefined,
-    };
+    const byId = new Set(table.getFields().map((field) => field.id().toString()));
+    const byName = new Map(
+      table.getFields().map((field) => [field.name().toString(), field.id().toString()])
+    );
+    const byDbName = new Map<string, string>();
+    for (const field of table.getFields()) {
+      const dbResult = field.dbFieldName();
+      if (dbResult.isOk()) {
+        const valueResult = dbResult.value.value();
+        if (valueResult.isOk() && valueResult.value) {
+          byDbName.set(valueResult.value, field.id().toString());
+        }
+      }
+    }
+    const resolved: T[] = [];
+    for (const item of items) {
+      const fieldId = byId.has(item.fieldId)
+        ? item.fieldId
+        : byName.get(item.fieldId) ?? byDbName.get(item.fieldId);
+      if (!fieldId) {
+        continue;
+      }
+      resolved.push({ ...item, fieldId });
+    }
+    return resolved.length ? resolved : undefined;
   }
 
   private shouldLoadQueryExtra(
@@ -762,6 +2254,9 @@ export class RecordOpenApiV2Service {
     if (query.includeQueryExtra === false) {
       return false;
     }
+    if (query.groupBy?.length || query.collapsedGroupIds?.length) {
+      return true;
+    }
     if (
       (recordSearchAccessPath?.kind === 'generated_tsvector' ||
         recordSearchAccessPath?.kind === 'generated_text') &&
@@ -770,36 +2265,29 @@ export class RecordOpenApiV2Service {
     ) {
       return false;
     }
-    const hasQueryExtraSource = Boolean(
-      query.search || query.groupBy?.length || query.collapsedGroupIds?.length
-    );
-    if (query.includeQueryExtra === true) {
-      return hasQueryExtraSource;
-    }
-
-    const hasExplicitProjection = Array.isArray(query.projection)
-      ? query.projection.length > 0
-      : Boolean(query.projection);
-    if (hasExplicitProjection && !query.search && !query.collapsedGroupIds?.length) {
-      return false;
-    }
-
-    return hasQueryExtraSource;
+    return Boolean(query.search);
   }
 
   private async loadQueryExtraWithTrace(
     context: IExecutionContext,
     tableId: string,
     query: IGetRecordsRo,
-    recordSearchAccessPath?: IRecordSearchAccessPath
+    recordSearchAccessPath?: IRecordSearchAccessPath,
+    queryScope?: RecordQueryPluginScope
   ): Promise<IRecordsVo['extra'] | undefined> {
     const shouldLoad = this.shouldLoadQueryExtra(query, recordSearchAccessPath);
+    // Fail-closed: residual V1 getDocIdsByQuery may not honor V2 plugin scope
+    // (missing CLS authority on internal/delegated paths). Prefer omitting
+    // searchHitIndex/group counts over leaking unauthorized ids/structure.
+    const scopeRestrictsAccess = this.queryScopeRestrictsAccess(queryScope);
+    const enabled = shouldLoad && !scopeRestrictsAccess;
 
     return await this.withRecordReadSpan(
       context,
       'teable.RecordOpenApiV2Service.queryExtra',
       {
-        'record.read.query_extra_enabled': shouldLoad,
+        'record.read.query_extra_enabled': enabled,
+        'record.read.query_extra_skipped_for_scope': shouldLoad && scopeRestrictsAccess,
         'record.read.include_query_extra': query.includeQueryExtra !== false,
         'record.read.has_search': Boolean(query.search),
         'record.read.search_access_path': recordSearchAccessPath?.kind ?? 'default',
@@ -808,9 +2296,24 @@ export class RecordOpenApiV2Service {
         'record.read.has_explicit_projection': Boolean(query.projection),
       },
       () =>
-        shouldLoad
+        enabled
           ? this.withTableDataClient(tableId, () => this.getQueryExtra(tableId, query))
           : Promise.resolve(undefined)
+    );
+  }
+
+  /**
+   * True when V2 plugin scope constrains rows/fields — V1 queryExtra must not run.
+   */
+  private queryScopeRestrictsAccess(scope: RecordQueryPluginScope | undefined): boolean {
+    if (!scope) {
+      return false;
+    }
+    return Boolean(
+      scope.recordSpec ||
+        scope.fieldMasks?.length ||
+        scope.readableFieldIds != null ||
+        scope.skipRecordSpec
     );
   }
 
@@ -923,7 +2426,7 @@ export class RecordOpenApiV2Service {
       const result = await executeUpdateRecordEndpoint(context, v2Input, commandBus);
       if (!(result.status === 200 && result.body.ok)) {
         if (!result.body.ok) {
-          this.throwV2Error(result.body.error, result.status);
+          throwV2Error(result.body.error, result.status);
         }
         throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
       }
@@ -933,6 +2436,93 @@ export class RecordOpenApiV2Service {
       return result.body.data.record;
     }
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
+  }
+
+  async buttonClick(
+    tableId: string,
+    recordId: string,
+    fieldId: string,
+    shareScope?: {
+      viewId: string;
+      includeHiddenFields: boolean;
+      includeRecords: boolean;
+    }
+  ): Promise<IButtonClickVo> {
+    await this.assertTableRecordWritable(tableId);
+    const container = await this.v2ContainerService.getContainerForTable(tableId);
+    const commandBus = container.resolve<ICommandBus>(v2CoreTokens.commandBus);
+    const context = await this.v2ContextFactory.createContext(container);
+    const command = ClickButtonCommand.create({
+      tableId,
+      recordId,
+      fieldId,
+      shareScope,
+    });
+    if (command.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(command.error),
+        mapDomainErrorToHttpStatus(command.error)
+      );
+    }
+    const result = await commandBus.execute<ClickButtonCommand, ClickButtonResult>(
+      context,
+      command.value
+    );
+    if (result.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(result.error),
+        mapDomainErrorToHttpStatus(result.error)
+      );
+    }
+    const record: IRecord = {
+      id: result.value.record.id().toString(),
+      fields: Object.fromEntries(
+        result.value.record
+          .fields()
+          .entries()
+          .map(({ fieldId: resultFieldId, value }) => [resultFieldId.toString(), value.toValue()])
+      ),
+    };
+    await this.clearUndoRedoEnginePreference(tableId);
+    return {
+      runId: result.value.runId,
+      tableId: result.value.tableId,
+      fieldId: result.value.fieldId,
+      record,
+    };
+  }
+
+  async buttonReset(tableId: string, recordId: string, fieldId: string): Promise<IRecord> {
+    await this.assertTableRecordWritable(tableId);
+    const container = await this.v2ContainerService.getContainerForTable(tableId);
+    const commandBus = container.resolve<ICommandBus>(v2CoreTokens.commandBus);
+    const context = await this.v2ContextFactory.createContext(container);
+    const command = ResetButtonCommand.create({ tableId, recordId, fieldId });
+    if (command.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(command.error),
+        mapDomainErrorToHttpStatus(command.error)
+      );
+    }
+    const result = await commandBus.execute<ResetButtonCommand, ResetButtonResult>(
+      context,
+      command.value
+    );
+    if (result.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(result.error),
+        mapDomainErrorToHttpStatus(result.error)
+      );
+    }
+    const fields = Object.fromEntries(
+      result.value.record
+        .fields()
+        .entries()
+        .filter(({ value }) => value.toValue() != null)
+        .map(({ fieldId: resultFieldId, value }) => [resultFieldId.toString(), value.toValue()])
+    );
+    await this.clearUndoRedoEnginePreference(tableId);
+    return { id: result.value.record.id().toString(), fields };
   }
 
   async updateRecords(
@@ -988,7 +2578,7 @@ export class RecordOpenApiV2Service {
     );
     if (!(updateResult.status === 200 && updateResult.body.ok)) {
       if (!updateResult.body.ok) {
-        this.throwV2Error(updateResult.body.error, updateResult.status);
+        throwV2Error(updateResult.body.error, updateResult.status);
       }
       throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
     }
@@ -1135,7 +2725,7 @@ export class RecordOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -1164,7 +2754,7 @@ export class RecordOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -1234,7 +2824,7 @@ export class RecordOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -1258,7 +2848,7 @@ export class RecordOpenApiV2Service {
     const preparedPaste = await this.preparePasteCommandInput(tableId, pasteRo, options);
     const commandResult = PasteStreamCommand.create(preparedPaste.commandInput);
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -1269,7 +2859,7 @@ export class RecordOpenApiV2Service {
       commandResult.value
     );
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -1311,7 +2901,7 @@ export class RecordOpenApiV2Service {
       targetFieldIds: fieldIds,
     });
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -1322,7 +2912,7 @@ export class RecordOpenApiV2Service {
       commandResult.value
     );
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -1736,7 +3326,7 @@ export class RecordOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -1771,7 +3361,7 @@ export class RecordOpenApiV2Service {
       ignoreViewQuery: rangeQuery.ignoreViewQuery,
     });
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -1782,7 +3372,7 @@ export class RecordOpenApiV2Service {
       commandResult.value
     );
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -1826,7 +3416,7 @@ export class RecordOpenApiV2Service {
       targetFieldIds: this.resolveSelectedFieldIds(selectionRo.selection),
     });
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -1837,7 +3427,7 @@ export class RecordOpenApiV2Service {
       commandResult.value
     );
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -1968,7 +3558,7 @@ export class RecordOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -2004,7 +3594,7 @@ export class RecordOpenApiV2Service {
       ignoreViewQuery: rangeQuery.ignoreViewQuery,
     });
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -2015,7 +3605,7 @@ export class RecordOpenApiV2Service {
       commandResult.value
     );
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -2057,7 +3647,7 @@ export class RecordOpenApiV2Service {
       excludedTargetRecordIds: this.resolveExcludedRecordIds(selectionRo.selection),
     });
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -2068,7 +3658,7 @@ export class RecordOpenApiV2Service {
       commandResult.value
     );
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -2107,7 +3697,7 @@ export class RecordOpenApiV2Service {
       ignoreViewQuery: rangeQuery.ignoreViewQuery,
     });
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -2118,7 +3708,7 @@ export class RecordOpenApiV2Service {
       DuplicateRecordsStreamResult
     >(context, commandResult.value);
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -2166,23 +3756,30 @@ export class RecordOpenApiV2Service {
   async deleteRecordsByIds(
     tableId: string,
     recordIds: string[],
-    _windowId?: string
+    _windowId?: string,
+    options?: IDeleteRecordsCommandOptions
   ): Promise<void> {
     await this.assertTableRecordWritable(tableId);
     const container = await this.v2ContainerService.getContainerForTable(tableId);
     const commandBus = container.resolve<ICommandBus>(v2CoreTokens.commandBus);
     const context = await this.v2ContextFactory.createContext(container);
 
-    await this.executeDeleteRecordsCommand(context, commandBus, tableId, recordIds);
+    await this.executeDeleteRecordsCommand(context, commandBus, tableId, recordIds, options);
   }
 
   private async executeDeleteRecordsCommand(
     context: IExecutionContext,
     commandBus: ICommandBus,
     tableId: string,
-    recordIds: string[]
+    recordIds: string[],
+    options?: IDeleteRecordsCommandOptions
   ): Promise<void> {
-    const result = await executeDeleteRecordsEndpoint(context, { tableId, recordIds }, commandBus);
+    const result = await executeDeleteRecordsEndpoint(
+      context,
+      { tableId, recordIds },
+      commandBus,
+      options
+    );
 
     if (result.status === 200 && result.body.ok) {
       await this.clearUndoRedoEnginePreference(tableId);
@@ -2190,7 +3787,7 @@ export class RecordOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -2318,6 +3915,95 @@ export class RecordOpenApiV2Service {
     return [searchValue, fieldId, hideNotMatch];
   }
 
+  /**
+   * Pure-path filter normalize: field meta from table aggregate (no FieldService).
+   * Always rewrites field keys to field **ids** so ListTableRecords (fieldKeyType=id)
+   * can apply filters that clients send as names.
+   */
+  private normalizeFilterForV2FromTable(
+    table: Table,
+    filter: unknown
+  ): RecordFilter | undefined | null {
+    const fieldMetaMap = this.buildFilterFieldMetaFromTable(table);
+    const mapped = this.mapV1FilterToV2(filter);
+    if (!mapped) {
+      return mapped;
+    }
+    const withIds = this.rewriteFilterFieldKeysToIds(table, mapped);
+    if (!withIds) {
+      return undefined;
+    }
+    return this.normalizeFilterForV2WithFieldMeta(filter, fieldMetaMap, withIds);
+  }
+
+  /**
+   * Rewrite filter condition fieldId (and field-reference values) from name/dbName
+   * to field ids. List query always uses fieldKeyType=id.
+   */
+  private rewriteFilterFieldKeysToIds(table: Table, filter: RecordFilter): RecordFilter | null {
+    const byId = new Map(table.getFields().map((field) => [field.id().toString(), field]));
+    const byName = new Map(
+      table.getFields().map((field) => [field.name().toString(), field.id().toString()])
+    );
+    const byDbName = new Map<string, string>();
+    for (const field of table.getFields()) {
+      const dbResult = field.dbFieldName();
+      if (dbResult.isOk()) {
+        const valueResult = dbResult.value.value();
+        if (valueResult.isOk() && valueResult.value) {
+          byDbName.set(valueResult.value, field.id().toString());
+        }
+      }
+    }
+
+    const resolveKey = (key: string): string | undefined => {
+      if (byId.has(key)) return key;
+      return byName.get(key) ?? byDbName.get(key);
+    };
+
+    const rewriteNode = (node: RecordFilterNode): RecordFilterNode | null => {
+      if ('not' in node) {
+        const next = rewriteNode(node.not);
+        return next ? { not: next } : null;
+      }
+      if ('items' in node) {
+        const items = node.items
+          .map((item) => rewriteNode(item))
+          .filter((item): item is RecordFilterNode => Boolean(item));
+        if (!items.length) return null;
+        return { conjunction: node.conjunction, items };
+      }
+      const fieldId = resolveKey(node.fieldId);
+      if (!fieldId) {
+        return null;
+      }
+      let value = node.value;
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        (value as { type?: string }).type === 'field' &&
+        typeof (value as { fieldId?: unknown }).fieldId === 'string'
+      ) {
+        const refId = resolveKey((value as { fieldId: string }).fieldId);
+        if (!refId) {
+          return null;
+        }
+        value = { ...(value as object), fieldId: refId } as typeof value;
+      }
+      return { ...node, fieldId, value };
+    };
+
+    if (filter == null) {
+      return null;
+    }
+    return rewriteNode(filter);
+  }
+
+  /**
+   * Hybrid/write paths may still resolve meta via FieldService until those paths
+   * are pure-V2. Prefer {@link normalizeFilterForV2FromTable} on the record-read path.
+   */
   private async normalizeFilterForV2(
     tableId: string,
     filter: unknown
@@ -2338,6 +4024,73 @@ export class RecordOpenApiV2Service {
         },
       ])
     );
+    return this.normalizeFilterForV2WithFieldMeta(filter, fieldMetaMap, mapped);
+  }
+
+  private buildFilterFieldMetaFromTable(table: Table): Map<string, FilterFieldMeta> {
+    const fieldMetaMap = new Map<string, FilterFieldMeta>();
+    for (const field of table.getFields()) {
+      const presentationField = this.presentationField(field);
+      const type = presentationField.type().toString() as FieldType;
+      const valueTypeResult = field.accept(new FieldValueTypeVisitor());
+      const optionsResult = presentationField.accept(new FieldOptionsDtoVisitor());
+      const options =
+        optionsResult.isOk() && optionsResult.value && typeof optionsResult.value === 'object'
+          ? (optionsResult.value as FilterFieldMeta['options'])
+          : undefined;
+      const meta: FilterFieldMeta = {
+        type,
+        cellValueType: valueTypeResult.isOk()
+          ? this.cellValueTypeFromV2ValueType(valueTypeResult.value.cellValueType.toString())
+          : this.cellValueTypeFromV2FieldType(type),
+        options,
+      };
+      fieldMetaMap.set(field.id().toString(), meta);
+      fieldMetaMap.set(field.name().toString(), meta);
+    }
+    return fieldMetaMap;
+  }
+
+  private cellValueTypeFromV2ValueType(type: string): CellValueType {
+    switch (type) {
+      case 'boolean':
+        return CellValueType.Boolean;
+      case 'number':
+        return CellValueType.Number;
+      case 'dateTime':
+        return CellValueType.DateTime;
+      default:
+        return CellValueType.String;
+    }
+  }
+
+  private cellValueTypeFromV2FieldType(type: string): CellValueType {
+    switch (type) {
+      case 'checkbox':
+        return CellValueType.Boolean;
+      case 'number':
+      case 'rating':
+      case 'autoNumber':
+        return CellValueType.Number;
+      case 'date':
+      case 'createdTime':
+      case 'lastModifiedTime':
+        return CellValueType.DateTime;
+      default:
+        return CellValueType.String;
+    }
+  }
+
+  private normalizeFilterForV2WithFieldMeta(
+    filter: unknown,
+    fieldMetaMap: Map<string, FilterFieldMeta>,
+    preMapped?: RecordFilter | null
+  ): RecordFilter | undefined | null {
+    const mapped = preMapped !== undefined ? preMapped : this.mapV1FilterToV2(filter);
+    if (!mapped) {
+      return mapped;
+    }
+
     const currentUserId = this.cls.get('user.id');
 
     const normalizeNode = (node: RecordFilterNode): RecordFilterNode | null => {
@@ -2607,7 +4360,7 @@ export class RecordOpenApiV2Service {
     if (record.mode !== 'dateRange') return null;
 
     if (operator !== 'is' && operator !== 'isWithIn') {
-      this.throwV2Error(
+      throwV2Error(
         {
           code: invalidFilterCode,
           message: 'dateRange mode only supports is/isWithIn operators',
@@ -2634,7 +4387,7 @@ export class RecordOpenApiV2Service {
       return null;
     }
     if (startTimestamp > endTimestamp) {
-      this.throwV2Error(
+      throwV2Error(
         {
           code: invalidFilterCode,
           message: 'dateRange exactDate must be less than or equal to exactDateEnd',
@@ -2763,7 +4516,7 @@ export class RecordOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);

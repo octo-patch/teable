@@ -50,6 +50,7 @@ import {
   PostgresTableRecordRepository,
   PostgresRecordOrderCalculator,
   PostgresAttachmentLookupService,
+  PostgresCollaboratorDirectoryService,
   PostgresUserLookupService,
 } from '../record/repository';
 import {
@@ -154,6 +155,9 @@ export const registerV2TableRepositoryPostgresAdapter = (
     { lifecycle: Lifecycle.Singleton }
   );
   c.register(v2CoreTokens.userLookupService, PostgresUserLookupService, {
+    lifecycle: Lifecycle.Singleton,
+  });
+  c.register(v2CoreTokens.collaboratorDirectoryService, PostgresCollaboratorDirectoryService, {
     lifecycle: Lifecycle.Singleton,
   });
 

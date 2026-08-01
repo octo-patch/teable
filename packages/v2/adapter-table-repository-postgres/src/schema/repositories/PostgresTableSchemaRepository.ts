@@ -30,6 +30,11 @@ import {
   RecordsBatchUpdated,
 } from '@teable/v2-core';
 import { inject, injectable } from '@teable/v2-di';
+import {
+  formulaSqlPgTokens,
+  Pg16TypeValidationStrategy,
+  type IPgTypeValidationStrategy,
+} from '@teable/v2-formula-sql-pg';
 import type { V1TeableDatabase } from '@teable/v2-postgres-schema';
 import { sql } from 'kysely';
 import type {
@@ -52,6 +57,7 @@ import {
 } from '../../shared/db';
 import {
   createSchemaNotNullViolationError,
+  createSchemaUniqueViolationError,
   isNotNullViolation,
   isUniqueViolation,
 } from '../../shared/errors';
@@ -142,7 +148,9 @@ export class PostgresTableSchemaRepository implements ITableSchemaRepository {
     @inject(v2RecordRepositoryPostgresTokens.computedDependencyGraph)
     private readonly fieldDependencyGraph: FieldDependencyGraph,
     @inject(v2RecordRepositoryPostgresTokens.metaDb)
-    private readonly metaDb: Kysely<V1TeableDatabase> = db
+    private readonly metaDb: Kysely<V1TeableDatabase> = db,
+    @inject(formulaSqlPgTokens.typeValidationStrategy)
+    private readonly typeValidationStrategy: IPgTypeValidationStrategy = new Pg16TypeValidationStrategy()
   ) {}
 
   private resolveMetaDb(
@@ -731,6 +739,7 @@ export class PostgresTableSchemaRepository implements ITableSchemaRepository {
             recordUpdates.push(update);
           },
         },
+        typeValidationStrategy: repository.typeValidationStrategy,
       });
       yield* mutateSpec.accept(visitor);
       const statements = yield* visitor.where();
@@ -748,16 +757,11 @@ export class PostgresTableSchemaRepository implements ITableSchemaRepository {
           });
         } catch (error) {
           if (isUniqueViolation(error)) {
-            return err(
-              domainError.validation({
-                message: 'Cannot complete update: unique constraint violated',
-                code: 'validation.field.unique',
-              })
-            );
+            return err(createSchemaUniqueViolationError(error, tableName, table.getFields()));
           }
 
           if (isNotNullViolation(error)) {
-            return err(createSchemaNotNullViolationError(error, table.getFields(), context.$t));
+            return err(createSchemaNotNullViolationError(error, table.getFields()));
           }
 
           return err(

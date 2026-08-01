@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { BaseId } from '../../base/BaseId';
-import { Table } from '../Table';
-import { TableId } from '../TableId';
-import { TableName } from '../TableName';
 import { FieldId } from '../fields/FieldId';
 import { FieldName } from '../fields/FieldName';
 import { SingleLineTextField } from '../fields/types/SingleLineTextField';
+import { Table } from '../Table';
+import { TableId } from '../TableId';
+import { TableName } from '../TableName';
 import { GridView } from './types/GridView';
 import { ViewColumnMeta } from './ViewColumnMeta';
 import { ViewId } from './ViewId';
@@ -134,12 +134,32 @@ describe('View.onFieldDeleted', () => {
       ._unsafeUnwrap();
     view
       .setQueryDefaults(
-        ViewQueryDefaults.create({
-          sort: [
-            { fieldId: amountFieldId.toString(), order: 'asc' },
-            { fieldId: statusFieldId.toString(), order: 'asc' },
-          ],
-        })._unsafeUnwrap()
+        ViewQueryDefaults.create(
+          {
+            filter: {
+              fieldId: ownerFieldId.toString(),
+              operator: 'isAnyOf',
+              value: ['alpha'],
+            },
+            sort: [
+              { fieldId: amountFieldId.toString(), order: 'asc' },
+              { fieldId: statusFieldId.toString(), order: 'asc' },
+            ],
+          },
+          {
+            sourceFilter: {
+              conjunction: 'and',
+              filterSet: [
+                {
+                  fieldId: ownerFieldId.toString(),
+                  operator: 'IN',
+                  isSymbol: true,
+                  value: 'alpha',
+                },
+              ],
+            },
+          }
+        )._unsafeUnwrap()
       )
       ._unsafeUnwrap();
 
@@ -164,8 +184,104 @@ describe('View.onFieldDeleted', () => {
       ._unsafeUnwrap();
 
     expect(update?.queryDefaults?.toDto()).toEqual({
+      filter: {
+        conjunction: 'and',
+        items: [
+          {
+            fieldId: ownerFieldId.toString(),
+            operator: 'isAnyOf',
+            value: ['alpha'],
+          },
+        ],
+      },
       sort: [{ fieldId: statusFieldId.toString(), order: 'asc' }],
       manualSort: false,
     });
+    expect(update?.queryDefaults?.sourceFilter()).toEqual({
+      conjunction: 'and',
+      filterSet: [
+        {
+          fieldId: ownerFieldId.toString(),
+          operator: 'IN',
+          isSymbol: true,
+          value: 'alpha',
+        },
+      ],
+    });
+  });
+
+  it('does not report a query-default change when deleting a field unrelated to the query', () => {
+    const baseId = BaseId.create(`bse${'g'.repeat(16)}`)._unsafeUnwrap();
+    const tableId = TableId.create(`tbl${'g'.repeat(16)}`)._unsafeUnwrap();
+    const viewId = ViewId.create(`viw${'g'.repeat(16)}`)._unsafeUnwrap();
+    const queriedFieldId = FieldId.create(`fld${'g'.repeat(16)}`)._unsafeUnwrap();
+    const deletedFieldId = FieldId.create(`fld${'h'.repeat(16)}`)._unsafeUnwrap();
+    const queriedField = SingleLineTextField.create({
+      id: queriedFieldId,
+      name: FieldName.create('Queried')._unsafeUnwrap(),
+    })._unsafeUnwrap();
+    const deletedField = SingleLineTextField.create({
+      id: deletedFieldId,
+      name: FieldName.create('Unrelated')._unsafeUnwrap(),
+    })._unsafeUnwrap();
+    const sourceFilter = {
+      conjunction: 'and' as const,
+      filterSet: [
+        {
+          fieldId: queriedFieldId.toString(),
+          operator: '=' as const,
+          isSymbol: true as const,
+          value: 'alpha',
+        },
+      ],
+    };
+    const view = GridView.create({
+      id: viewId,
+      name: ViewName.create('Grid')._unsafeUnwrap(),
+    })._unsafeUnwrap();
+    view
+      .setColumnMeta(
+        ViewColumnMeta.create({
+          [queriedFieldId.toString()]: { order: 0 },
+          [deletedFieldId.toString()]: { order: 1 },
+        })._unsafeUnwrap()
+      )
+      ._unsafeUnwrap();
+    view
+      .setQueryDefaults(
+        ViewQueryDefaults.create(
+          {
+            filter: {
+              fieldId: queriedFieldId.toString(),
+              operator: 'is',
+              value: 'alpha',
+            },
+          },
+          { sourceFilter }
+        )._unsafeUnwrap()
+      )
+      ._unsafeUnwrap();
+
+    const previousTable = Table.rehydrate({
+      id: tableId,
+      baseId,
+      name: TableName.create('Tasks')._unsafeUnwrap(),
+      fields: [queriedField, deletedField],
+      views: [view],
+      primaryFieldId: queriedFieldId,
+    })._unsafeUnwrap();
+    const currentTable = previousTable.removeField(deletedFieldId)._unsafeUnwrap();
+    const currentView = currentTable.getView(viewId)._unsafeUnwrap();
+
+    const update = currentView
+      .onFieldDeleted(deletedField, {
+        table: currentTable,
+        sourceTable: currentTable,
+        previousSourceTable: previousTable,
+      })
+      ._unsafeUnwrap();
+
+    expect(update).toBeUndefined();
+    expect(currentView.queryDefaults()._unsafeUnwrap().sourceFilter()).toEqual(sourceFilter);
   });
 });

@@ -22,7 +22,7 @@ import { difference } from 'lodash';
 import { ClsService } from 'nestjs-cls';
 import { z } from 'zod';
 import { BaseConfig, type IBaseConfig } from '../../../configs/base.config';
-import { CustomHttpException, getDefaultCodeByStatus } from '../../../custom.exception';
+import { CustomHttpException } from '../../../custom.exception';
 import { Events } from '../../../event-emitter/events';
 import type { IClsStore } from '../../../types/cls';
 import { AuditScope } from '../../audit/audit-scope';
@@ -32,6 +32,7 @@ import { SpaceDataDbMigrationGuardService } from '../../space/space-data-db-migr
 import { TableOpenApiService } from '../../table/open-api/table-open-api.service';
 import { V2ContainerService } from '../../v2/v2-container.service';
 import { V2ExecutionContextFactory } from '../../v2/v2-execution-context.factory';
+import { throwV2Error } from '../../v2/v2-http-error';
 
 /**
  * V2 Import Open API Service
@@ -75,22 +76,6 @@ export class ImportOpenApiV2Service {
     // For relative URLs, use localhost with the configured port
     const port = this.configService.get<number>('PORT') || 3000;
     return `http://localhost:${port}${trimmedUrl}`;
-  }
-
-  private throwV2Error(
-    error: {
-      code: string;
-      message: string;
-      tags?: ReadonlyArray<string>;
-      details?: Readonly<Record<string, unknown>>;
-    },
-    status: number
-  ): never {
-    throw new CustomHttpException(error.message, getDefaultCodeByStatus(status), {
-      domainCode: error.code,
-      domainTags: error.tags,
-      details: error.details,
-    });
   }
 
   /**
@@ -150,7 +135,7 @@ export class ImportOpenApiV2Service {
       maxRowCount: normalizedMaxRowCount,
     });
     if (commandResult.isErr()) {
-      this.throwV2Error(commandResult.error, mapDomainErrorToHttpStatus(commandResult.error));
+      throwV2Error(commandResult.error, mapDomainErrorToHttpStatus(commandResult.error));
     }
 
     const result = await commandBus.execute<ImportCsvCommand, ImportCsvResult>(
@@ -164,7 +149,7 @@ export class ImportOpenApiV2Service {
         status: 'failed',
         error: result.error.message,
       });
-      this.throwV2Error(result.error, mapDomainErrorToHttpStatus(result.error));
+      throwV2Error(result.error, mapDomainErrorToHttpStatus(result.error));
     }
 
     const tableId = result.value.table.id().toString();
@@ -302,7 +287,7 @@ export class ImportOpenApiV2Service {
             ? HttpStatus.NOT_FOUND
             : HttpStatus.INTERNAL_SERVER_ERROR;
 
-      this.throwV2Error(result.error, status);
+      throwV2Error(result.error, status);
     }
 
     // No manual audit emit: ImportRecordsHandler publishes RecordsBatchCreated per batch.

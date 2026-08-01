@@ -9,13 +9,13 @@ import type {
   IComputedOutboxMaintenanceTarget,
 } from '../../../global/data-db-client-manager.service';
 import { DataDbClientManager } from '../../../global/data-db-client-manager.service';
+import { mapWithConcurrency } from '../../../utils/map-with-concurrency';
 import { IComputedOutboxWakeupAppPublisher } from './computed-outbox-wakeup.publisher';
 import {
   COMPUTED_OUTBOX_ANOMALY_FETCH_CAP,
   COMPUTED_OUTBOX_ANOMALY_GROUP_SAMPLE_LIMIT,
   COMPUTED_OUTBOX_WAKEUP_PUBLISHER,
 } from './constants';
-import { mapWithConcurrency } from './map-with-concurrency';
 
 export type ComputedOutboxAnomaly = IComputedOutboxMaintenanceAnomaly & {
   targetId: string;

@@ -33,7 +33,11 @@ import {
   type SingleSelectField,
   type UserField,
 } from '@teable/v2-core';
-import { formatNumberStringSql } from '@teable/v2-formula-sql-pg';
+import {
+  formatNumberStringSql,
+  Pg16TypeValidationStrategy,
+  type IPgTypeValidationStrategy,
+} from '@teable/v2-formula-sql-pg';
 import type { V1TeableDatabase } from '@teable/v2-postgres-schema';
 import type { CompiledQuery, Kysely } from 'kysely';
 import { sql } from 'kysely';
@@ -56,6 +60,7 @@ export type FieldConversionParams = {
   fieldId?: string;
   tableLocationsById?: ReadonlyMap<string, TableIdentifier>;
   fieldsById?: ReadonlyMap<string, FieldConversionFieldMetadata>;
+  typeValidationStrategy?: IPgTypeValidationStrategy;
 };
 
 const createCompiledStatementBuilder = (
@@ -72,6 +77,20 @@ const quoteLiteral = (value: string): string => `'${value.replace(/'/g, "''")}'`
 
 const ISO_DATE_OR_DATETIME_SQL_REGEX =
   '^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?([Zz]|[+-][0-9]{2}(:?[0-9]{2})?)?)?$';
+
+const buildRatingConversionExpression = (valueExpression: string, max: number): string =>
+  `CASE WHEN (${valueExpression}) IS NULL OR ROUND((${valueExpression})::double precision) < 1 THEN NULL ELSE LEAST(ROUND((${valueExpression})::double precision), ${max}) END`;
+
+const DEFAULT_TYPE_VALIDATION_STRATEGY = new Pg16TypeValidationStrategy();
+
+const safeTimestampCastSql = (
+  valueSql: string,
+  strategy: IPgTypeValidationStrategy = DEFAULT_TYPE_VALIDATION_STRATEGY
+): string => {
+  const isIsoDate = `(${valueSql}) ~ ${quoteLiteral(ISO_DATE_OR_DATETIME_SQL_REGEX)}`;
+  const isValidTimestamp = strategy.isValidForType(`(${valueSql})::text`, 'timestamptz');
+  return `CASE WHEN ${isIsoDate} AND ${isValidTimestamp} THEN (${valueSql})::timestamptz ELSE NULL END`;
+};
 
 const SELECT_CHOICE_NAME_MAX_LENGTH =
   DEFAULT_TABLE_DATA_SAFETY_LIMITS.fieldOptions.maxSelectChoiceNameLength;
@@ -976,7 +995,7 @@ const buildFormulaMigrationStatements = (
       tmp,
       whereNotNull,
       cellValueType,
-      newType,
+      newField,
       oldField,
       params
     );
@@ -1087,12 +1106,12 @@ const buildLookupToBasicFieldMigrationStatements = (
           return numericValueExpression;
         case 'rating': {
           const max = (newField as RatingField).ratingMax().toNumber();
-          return `CASE WHEN (${firstValueExpression}) ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, LEAST(FLOOR((${firstValueExpression})::double precision), ${max})) ELSE NULL END`;
+          return `CASE WHEN (${firstValueExpression}) ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${buildRatingConversionExpression(firstValueExpression, max)} ELSE NULL END`;
         }
         case 'checkbox':
           return `CASE WHEN lower((${firstValueExpression})::text) IN ('true', 't', '1', 'yes', 'y') THEN TRUE WHEN lower((${firstValueExpression})::text) IN ('false', 'f', '0', 'no', 'n') THEN FALSE WHEN (${firstValueExpression}) IS NOT NULL AND (${firstValueExpression}) <> '' THEN TRUE ELSE NULL END`;
         case 'date':
-          return `CASE WHEN (${firstValueExpression}) ~ ${quoteLiteral(ISO_DATE_OR_DATETIME_SQL_REGEX)} THEN (${firstValueExpression})::timestamptz ELSE NULL END`;
+          return safeTimestampCastSql(firstValueExpression, params.typeValidationStrategy);
         case 'singleSelect':
           return firstValueExpression;
         case 'multipleSelect':
@@ -1134,10 +1153,11 @@ function buildFormulaMigrationSql(
   tmp: string,
   whereNotNull: string,
   cellValueType: CellValueType | undefined,
-  newType: string,
+  newField: Field,
   oldField: FormulaField,
-  _params: FieldConversionParams
+  params: FieldConversionParams
 ): string | null {
+  const newType = newField.type().toString();
   const isDateTime = cellValueType?.equals(CellValueType.dateTime());
   const isNumber = cellValueType?.equals(CellValueType.number());
   const isString = cellValueType?.equals(CellValueType.string());
@@ -1174,8 +1194,8 @@ function buildFormulaMigrationSql(
   // --- Target: rating ---
   if (newType === 'rating') {
     if (isNumber) {
-      // Clamp number to valid rating range [1, max]
-      return `UPDATE ${tbl} SET ${dst} = CASE WHEN ${tmp} >= 1 THEN LEAST(${tmp}, ${dst}) ELSE NULL END ${whereNotNull}`;
+      const max = (newField as RatingField).ratingMax().toNumber();
+      return `UPDATE ${tbl} SET ${dst} = ${buildRatingConversionExpression(tmp, max)} ${whereNotNull}`;
     }
     return null;
   }
@@ -1188,7 +1208,7 @@ function buildFormulaMigrationSql(
     }
     if (isString) {
       // Try to parse string as timestamp
-      return `UPDATE ${tbl} SET ${dst} = CASE WHEN ${tmp} ~ ${quoteLiteral(ISO_DATE_OR_DATETIME_SQL_REGEX)} THEN ${tmp}::timestamptz ELSE NULL END ${whereNotNull}`;
+      return `UPDATE ${tbl} SET ${dst} = ${safeTimestampCastSql(tmp, params.typeValidationStrategy)} ${whereNotNull}`;
     }
     // number, boolean → date: incompatible
     return null;
@@ -2036,14 +2056,14 @@ class TextFieldConversionVisitor extends BaseFieldConversionVisitor {
   visitRatingField(
     field: RatingField
   ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
-    // Text → Rating: parse as number, floor to integer, clamp to [0, max]
+    // Text → Rating: parse, round, clamp to max, and map values below 1 to NULL
     const { dbFieldName } = this.params;
     const col = `"${dbFieldName}"`;
     const max = field.ratingMax().toNumber();
     return ok([
       this.alterColumnTypeUsing(
         'double precision',
-        `CASE WHEN ${col} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, LEAST(FLOOR(${col}::double precision), ${max})) ELSE NULL END`
+        `CASE WHEN ${col} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${buildRatingConversionExpression(col, max)} ELSE NULL END`
       ),
     ]);
   }
@@ -2071,7 +2091,7 @@ class TextFieldConversionVisitor extends BaseFieldConversionVisitor {
     return ok([
       this.alterColumnTypeUsing(
         'timestamptz',
-        `CASE WHEN ${col} ~ ${quoteLiteral(ISO_DATE_OR_DATETIME_SQL_REGEX)} THEN ${col}::timestamptz ELSE NULL END`
+        safeTimestampCastSql(col, this.params.typeValidationStrategy)
       ),
     ]);
   }
@@ -2284,7 +2304,7 @@ class NumberFieldConversionVisitor extends BaseFieldConversionVisitor {
   visitRatingField(
     field: RatingField
   ): Result<ReadonlyArray<TableSchemaStatementBuilder>, DomainError> {
-    // Number → Rating: floor decimals to integer and clamp to [0, max]
+    // Number → Rating: round, clamp to max, and map values below 1 to NULL
     const { db, dbFieldName } = this.params;
     const fullTableName = this.fullTableName;
     const max = field.ratingMax().toNumber();
@@ -2292,7 +2312,7 @@ class NumberFieldConversionVisitor extends BaseFieldConversionVisitor {
       {
         scope: 'data',
         compile: () =>
-          sql`UPDATE ${sql.raw(fullTableName)} SET "${sql.raw(dbFieldName)}" = GREATEST(0, LEAST(FLOOR("${sql.raw(dbFieldName)}"), ${sql.val(max)}))`.compile(
+          sql`UPDATE ${sql.raw(fullTableName)} SET "${sql.raw(dbFieldName)}" = ${sql.raw(buildRatingConversionExpression(quoteIdent(dbFieldName), max))}`.compile(
             db
           ),
       },

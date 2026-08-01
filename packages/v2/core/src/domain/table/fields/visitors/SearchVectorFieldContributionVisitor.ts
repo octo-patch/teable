@@ -6,7 +6,6 @@ import type { Field } from '../Field';
 import type { AttachmentField } from '../types/AttachmentField';
 import type { AutoNumberField } from '../types/AutoNumberField';
 import type { ButtonField } from '../types/ButtonField';
-import { CellValueType } from '../types/CellValueType';
 import type { CheckboxField } from '../types/CheckboxField';
 import type { ConditionalLookupField } from '../types/ConditionalLookupField';
 import type { ConditionalRollupField } from '../types/ConditionalRollupField';
@@ -28,13 +27,18 @@ import type { SingleSelectField } from '../types/SingleSelectField';
 import type { UserField } from '../types/UserField';
 import { FieldValueTypeVisitor } from './FieldValueTypeVisitor';
 import type { IFieldVisitor } from './IFieldVisitor';
+import {
+  isSearchFieldTextProjection,
+  resolveSearchFieldTextShape,
+  type SearchFieldTextProjection,
+} from './SearchFieldTextShape';
 
 export type SearchDocumentFieldContribution = {
   readonly fieldId: string;
   readonly fieldType: string;
   readonly valueType?: string;
   readonly included: boolean;
-  readonly textProjection?: 'text_cast';
+  readonly textProjection?: SearchFieldTextProjection;
   readonly skippedReason?:
     | 'non_text_value'
     | 'unsupported_search_field_type'
@@ -42,14 +46,6 @@ export type SearchDocumentFieldContribution = {
 };
 
 const valueTypeVisitor = new FieldValueTypeVisitor();
-
-const include = (field: Field): SearchDocumentFieldContribution => ({
-  fieldId: field.id().toString(),
-  fieldType: field.type().toString(),
-  valueType: CellValueType.string().toString(),
-  included: true,
-  textProjection: 'text_cast',
-});
 
 const skip = (
   field: Field,
@@ -66,14 +62,27 @@ const skip = (
 export class SearchDocumentFieldContributionVisitor
   implements IFieldVisitor<SearchDocumentFieldContribution>
 {
-  private byValueType(field: Field): Result<SearchDocumentFieldContribution, DomainError> {
-    return field
-      .accept(valueTypeVisitor)
-      .map(({ cellValueType }) =>
-        cellValueType.equals(CellValueType.string())
-          ? include(field)
-          : skip(field, 'non_text_value', cellValueType.toString())
-      );
+  /**
+   * Include the field when its canonical search text shape has an
+   * expression-index-safe projection; skip it otherwise. Keeping this on the
+   * shared shape resolver is what keeps the generated document, the default
+   * ILIKE predicate, and the scoped rechecks projecting identical text.
+   */
+  private byShape(field: Field): Result<SearchDocumentFieldContribution, DomainError> {
+    return resolveSearchFieldTextShape(field).andThen((shape) =>
+      field.accept(valueTypeVisitor).map(({ cellValueType }) => {
+        if (isSearchFieldTextProjection(shape)) {
+          return {
+            fieldId: field.id().toString(),
+            fieldType: field.type().toString(),
+            valueType: cellValueType.toString(),
+            included: true,
+            textProjection: shape,
+          } satisfies SearchDocumentFieldContribution;
+        }
+        return skip(field, 'non_text_value', cellValueType.toString());
+      })
+    );
   }
 
   private unsupported(field: Field): Result<SearchDocumentFieldContribution, DomainError> {
@@ -85,47 +94,47 @@ export class SearchDocumentFieldContributionVisitor
   }
 
   visitSingleLineTextField(field: SingleLineTextField) {
-    return ok(include(field));
+    return this.byShape(field);
   }
 
   visitLongTextField(field: LongTextField) {
-    return ok(include(field));
+    return this.byShape(field);
   }
 
   visitNumberField(field: NumberField) {
-    return this.byValueType(field);
+    return this.byShape(field);
   }
 
   visitRatingField(field: RatingField) {
-    return this.byValueType(field);
+    return this.byShape(field);
   }
 
   visitFormulaField(field: FormulaField) {
-    return this.byValueType(field);
+    return this.byShape(field);
   }
 
   visitRollupField(field: RollupField) {
-    return this.byValueType(field);
+    return this.byShape(field);
   }
 
   visitSingleSelectField(field: SingleSelectField) {
-    return ok(include(field));
+    return this.byShape(field);
   }
 
   visitMultipleSelectField(field: MultipleSelectField) {
-    return ok(include(field));
+    return this.byShape(field);
   }
 
   visitCheckboxField(field: CheckboxField) {
-    return this.unsupported(field);
+    return this.byShape(field);
   }
 
   visitAttachmentField(field: AttachmentField) {
-    return this.unsupported(field);
+    return this.byShape(field);
   }
 
   visitDateField(field: DateField) {
-    return this.byValueType(field);
+    return this.byShape(field);
   }
 
   visitCreatedTimeField(field: CreatedTimeField) {
@@ -137,7 +146,7 @@ export class SearchDocumentFieldContributionVisitor
   }
 
   visitUserField(field: UserField) {
-    return ok(include(field));
+    return this.byShape(field);
   }
 
   visitCreatedByField(field: CreatedByField) {
@@ -157,19 +166,19 @@ export class SearchDocumentFieldContributionVisitor
   }
 
   visitLinkField(field: LinkField) {
-    return ok(include(field));
+    return this.byShape(field);
   }
 
   visitLookupField(field: LookupField) {
-    return this.byValueType(field);
+    return this.byShape(field);
   }
 
   visitConditionalRollupField(field: ConditionalRollupField) {
-    return this.byValueType(field);
+    return this.byShape(field);
   }
 
   visitConditionalLookupField(field: ConditionalLookupField) {
-    return this.byValueType(field);
+    return this.byShape(field);
   }
 }
 

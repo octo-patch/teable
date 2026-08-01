@@ -8,6 +8,7 @@ import type { SpecBuilderMode } from '../../shared/specification/SpecBuilder';
 import type { Table } from '../Table';
 import type { TableId } from '../TableId';
 import type { TableName } from '../TableName';
+import type { ViewId } from '../views/ViewId';
 import type { ITableSpecVisitor } from './ITableSpecVisitor';
 import { TableByBaseIdSpec } from './TableByBaseIdSpec';
 import { TableByIdSpec } from './TableByIdSpec';
@@ -15,6 +16,8 @@ import { TableByIdsSpec } from './TableByIdsSpec';
 import { TableByIncomingReferenceToTableSpec } from './TableByIncomingReferenceToTableSpec';
 import { TableByNameLikeSpec } from './TableByNameLikeSpec';
 import { TableByNameSpec } from './TableByNameSpec';
+import { TableByViewIdSpec } from './TableByViewIdSpec';
+import { TableWithViewIdsSpec } from './TableWithViewIdsSpec';
 
 export class TableSpecBuilder extends SpecBuilder<Table, ITableSpecVisitor, TableSpecBuilder> {
   private includeBaseId = true;
@@ -50,6 +53,16 @@ export class TableSpecBuilder extends SpecBuilder<Table, ITableSpecVisitor, Tabl
 
   byId(tableId: TableId): TableSpecBuilder {
     this.addSpec(TableByIdSpec.create(tableId));
+    return this;
+  }
+
+  withViewId(viewId: ViewId): TableSpecBuilder {
+    this.addSpec(TableByViewIdSpec.create(viewId));
+    return this;
+  }
+
+  withViewIds(viewIds: ReadonlyArray<ViewId>): TableSpecBuilder {
+    this.addSpec(TableWithViewIdsSpec.create(viewIds));
     return this;
   }
 

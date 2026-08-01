@@ -10,6 +10,12 @@ import {
   Relationship,
 } from '@teable/core';
 import { axios, buttonClick, buttonReset, updateRecords, type ITableFullVo } from '@teable/openapi';
+import { vi } from 'vitest';
+import {
+  X_TEABLE_V2_FEATURE_HEADER,
+  X_TEABLE_V2_HEADER,
+} from '../src/features/canary/interceptors/v2-indicator.interceptor';
+import { RecordOpenApiService } from '../src/features/record/open-api/record-open-api.service';
 import {
   convertField,
   createField,
@@ -27,7 +33,6 @@ import {
   updateRecord,
   updateRecordByApi,
 } from './utils/init-app';
-import { X_TEABLE_V2_HEADER } from '../src/features/canary/interceptors/v2-indicator.interceptor';
 
 describe('OpenAPI RecordController (e2e)', () => {
   let app: INestApplication;
@@ -1064,13 +1069,20 @@ describe('OpenAPI RecordController (e2e)', () => {
 
   describe('button field click and reset', () => {
     let table: ITableFullVo;
+    let previousForceV2All: string | undefined;
     beforeAll(async () => {
+      // These cases assert the v2 button-click chain (attribution headers and
+      // legacy-service isolation); pin the env regardless of the CI lane.
+      previousForceV2All = process.env.FORCE_V2_ALL;
+      process.env.FORCE_V2_ALL = 'true';
       table = await createTable(baseId, {
         name: 'table1',
       });
     });
 
     afterAll(async () => {
+      if (previousForceV2All == null) delete process.env.FORCE_V2_ALL;
+      else process.env.FORCE_V2_ALL = previousForceV2All;
       await permanentDeleteTable(baseId, table.id);
     });
 
@@ -1088,9 +1100,20 @@ describe('OpenAPI RecordController (e2e)', () => {
         },
       });
 
-      const res = await buttonClick(table.id, table.records[0].id, field.id);
-      const value = res.data.record.fields[field.id] as IButtonFieldCellValue;
-      expect(value.count).toEqual(1);
+      const legacyService = app.get(RecordOpenApiService);
+      const legacySpy = vi
+        .spyOn(legacyService, 'buttonClick')
+        .mockRejectedValue(new Error('legacy buttonClick must not be used'));
+      try {
+        const res = await buttonClick(table.id, table.records[0].id, field.id);
+        const value = res.data.record.fields[field.id] as IButtonFieldCellValue;
+        expect(value.count).toEqual(1);
+        expect(res.headers[X_TEABLE_V2_HEADER]).toBe('true');
+        expect(res.headers[X_TEABLE_V2_FEATURE_HEADER]).toBe('buttonClick');
+        expect(legacySpy).not.toHaveBeenCalled();
+      } finally {
+        legacySpy.mockRestore();
+      }
     });
 
     it('should not click a button field without workflow', async () => {
@@ -1102,7 +1125,7 @@ describe('OpenAPI RecordController (e2e)', () => {
         },
       });
 
-      expect(buttonClick(table.id, table.records[0].id, field.id)).rejects.toThrow();
+      await expect(buttonClick(table.id, table.records[0].id, field.id)).rejects.toThrow();
     });
 
     it('should not click a button field with exceed max count', async () => {
@@ -1124,7 +1147,7 @@ describe('OpenAPI RecordController (e2e)', () => {
       const value = res.data.record.fields[field.id] as IButtonFieldCellValue;
       expect(value.count).toEqual(1);
 
-      expect(buttonClick(table.id, table.records[0].id, field.id)).rejects.toThrow();
+      await expect(buttonClick(table.id, table.records[0].id, field.id)).rejects.toThrow();
     });
 
     it('should reset a button field', async () => {
@@ -1146,9 +1169,25 @@ describe('OpenAPI RecordController (e2e)', () => {
       const clickValue = clickRes.data.record.fields[field.id] as IButtonFieldCellValue;
       expect(clickValue.count).toEqual(1);
 
-      const resetRes = await buttonReset(table.id, table.records[0].id, field.id);
-      const resetValue = resetRes.data.fields[field.id] as IButtonFieldCellValue;
-      expect(resetValue).toBeUndefined();
+      const legacyService = app.get(RecordOpenApiService);
+      const legacySpy = vi
+        .spyOn(legacyService, 'resetButton')
+        .mockRejectedValue(new Error('legacy resetButton must not be used'));
+      try {
+        const resetRes = await buttonReset(table.id, table.records[0].id, field.id);
+        const resetValue = resetRes.data.fields[field.id] as IButtonFieldCellValue;
+        expect(resetValue).toBeUndefined();
+        expect(resetRes.headers[X_TEABLE_V2_HEADER]).toBe('true');
+        expect(resetRes.headers[X_TEABLE_V2_FEATURE_HEADER]).toBe('buttonReset');
+        await expect(buttonReset(table.id, table.records[0].id, field.id)).resolves.toMatchObject({
+          headers: {
+            [X_TEABLE_V2_FEATURE_HEADER]: 'buttonReset',
+          },
+        });
+        expect(legacySpy).not.toHaveBeenCalled();
+      } finally {
+        legacySpy.mockRestore();
+      }
     });
 
     it('should not reset a button field without resetCount', async () => {
@@ -1165,7 +1204,7 @@ describe('OpenAPI RecordController (e2e)', () => {
         },
       });
 
-      expect(buttonReset(table.id, table.records[0].id, field.id)).rejects.toThrow();
+      await expect(buttonReset(table.id, table.records[0].id, field.id)).rejects.toThrow();
     });
   });
 

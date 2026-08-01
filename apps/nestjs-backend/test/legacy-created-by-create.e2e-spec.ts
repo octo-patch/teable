@@ -105,8 +105,13 @@ describe('Legacy createdBy create compatibility (e2e) T6146', () => {
       const list = await getRecords(table.id, { fieldKeyType: FieldKeyType.Id });
       const target = list.records.find((r) => r.id === recordId);
       expect(target?.fields[nameField!.id]).toBe('legacy-created-by-row');
-      // Display may resolve via system column fallback
-      expect(target?.fields[createdByField.id]).toBeTruthy();
+      expect(target?.fields[createdByField.id]).toEqual(
+        expect.objectContaining({
+          id: rows[0]?.created_by,
+          title: expect.any(String),
+          avatarUrl: expect.stringContaining(`/avatar/${rows[0]?.created_by}`),
+        })
+      );
     } finally {
       await permanentDeleteTable(baseId, table.id);
     }

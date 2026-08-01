@@ -20,6 +20,7 @@ export { default as ArrowRight } from './components/ArrowRight';
 export { default as ArrowUp } from './components/ArrowUp';
 export { default as ArrowUpDown } from './components/ArrowUpDown';
 export { default as ArrowUpRight } from './components/ArrowUpRight';
+export { default as SquareArrowUpRight } from './components/SquareArrowUpRight';
 export { default as Audio } from './components/Audio';
 export { default as AppV0 } from './components/AppV0';
 export { default as Azure } from './components/Azure';

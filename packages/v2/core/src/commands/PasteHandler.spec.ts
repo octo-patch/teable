@@ -492,7 +492,12 @@ class FakeTableRecordRepository implements ITableRecordRepository {
   ): Promise<Result<UpdateManyStreamResult, DomainError>> {
     this.updateCalls += 1;
     if (this.updateManyStreamErrorAtCall === this.updateCalls) {
-      return err(domainError.infrastructure({ message: 'connection exhausted' }));
+      return err(
+        domainError.infrastructure({
+          message: 'connection exhausted',
+          localization: { i18nKey: 'httpErrors.custom.linkOneManyDuplicate' },
+        })
+      );
     }
     this.updateStreamContexts.push(context);
     this.updateStreamOptions.push(options ?? {});
@@ -2709,6 +2714,7 @@ describe('PasteHandler', () => {
         processedCount: 1,
         updatedCount: 1,
         message: 'connection exhausted',
+        localization: { i18nKey: 'httpErrors.custom.linkOneManyDuplicate' },
       });
       expect(recordRepository.updateCalls).toBe(2);
     });

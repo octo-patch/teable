@@ -10,6 +10,7 @@ import {
   type ITableFullVo,
   type ITableVo,
 } from '@teable/openapi';
+import { mapDomainErrorToHttpError, mapDomainErrorToHttpStatus } from '@teable/v2-contract-http';
 import {
   executeCreateTableEndpoint,
   executeDeleteTableEndpoint,
@@ -17,10 +18,14 @@ import {
   executeListTableRecordsEndpoint,
   executeRestoreTableEndpoint,
 } from '@teable/v2-contract-http-implementation/handlers';
-import { v2CoreTokens } from '@teable/v2-core';
-import type { ICommandBus, IExecutionContext, IQueryBus } from '@teable/v2-core';
+import { GetDefaultViewIdQuery, v2CoreTokens } from '@teable/v2-core';
+import type {
+  GetDefaultViewIdResult,
+  ICommandBus,
+  IExecutionContext,
+  IQueryBus,
+} from '@teable/v2-core';
 import { ClsService } from 'nestjs-cls';
-import { CustomHttpException, getDefaultCodeByStatus } from '../../../custom.exception';
 import { InjectDbProvider } from '../../../db-provider/db.provider';
 import { IDbProvider } from '../../../db-provider/db.provider.interface';
 import { DatabaseRouter } from '../../../global/database-router.service';
@@ -32,6 +37,7 @@ import { RecordHistoryColdStorageService } from '../../record-history-cold/recor
 import { SpaceDataDbMigrationGuardService } from '../../space/space-data-db-migration-guard.service';
 import { V2ContainerService } from '../../v2/v2-container.service';
 import { V2ExecutionContextFactory } from '../../v2/v2-execution-context.factory';
+import { throwV2Error } from '../../v2/v2-http-error';
 import { ViewService } from '../../view/view.service';
 import { TableDuplicateService } from '../table-duplicate.service';
 import { TableService } from '../table.service';
@@ -95,6 +101,32 @@ export class TableOpenApiV2Service {
     await this.spaceDataDbMigrationGuard?.assertTableWritable(tableId);
   }
 
+  async getDefaultViewId(tableId: string): Promise<{ id: string }> {
+    const container = await this.v2ContainerService.getContainerForTable(tableId);
+    const queryBus = container.resolve<IQueryBus>(v2CoreTokens.queryBus);
+    const context = await this.v2ContextFactory.createContext(container);
+    const queryResult = GetDefaultViewIdQuery.create({ tableId });
+    if (queryResult.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(queryResult.error),
+        mapDomainErrorToHttpStatus(queryResult.error)
+      );
+    }
+
+    const result = await queryBus.execute<GetDefaultViewIdQuery, GetDefaultViewIdResult>(
+      context,
+      queryResult.value
+    );
+    if (result.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(result.error),
+        mapDomainErrorToHttpStatus(result.error)
+      );
+    }
+
+    return { id: result.value.viewId };
+  }
+
   private async collectCrossSpaceAffectedFields(
     tableId: string
   ): Promise<Array<{ fieldId: string; fieldName: string; type: string }>> {
@@ -103,22 +135,6 @@ export class TableOpenApiV2Service {
     // all detected consistently with the duplicate-check endpoint and the
     // v1 downgrade path. Keeping detection in one place avoids drift.
     return this.tableDuplicateLegacyService.previewCrossSpaceAffectedFields(tableId);
-  }
-
-  private throwV2Error(
-    error: {
-      code: string;
-      message: string;
-      tags?: ReadonlyArray<string>;
-      details?: Readonly<Record<string, unknown>>;
-    },
-    status: number
-  ): never {
-    throw new CustomHttpException(error.message, getDefaultCodeByStatus(status), {
-      domainCode: error.code,
-      domainTags: error.tags,
-      details: error.details,
-    });
   }
 
   @Audit({
@@ -157,7 +173,7 @@ export class TableOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -191,7 +207,7 @@ export class TableOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -217,7 +233,7 @@ export class TableOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -279,7 +295,7 @@ export class TableOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -360,7 +376,7 @@ export class TableOpenApiV2Service {
       }
 
       if (!result.body.ok) {
-        this.throwV2Error(result.body.error, result.status);
+        throwV2Error(result.body.error, result.status);
       }
 
       throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);

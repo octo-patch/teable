@@ -12,6 +12,8 @@ export interface V1UserTable {
   id: string;
   name: string;
   email: string | null;
+  avatar: string | null;
+  is_system: boolean | null;
   // password: string;
   // created_time: ColumnType<Date, Date | undefined, never>;
   // last_modified_time: ColumnType<Date | null, Date | null | undefined, Date | null | undefined>;
@@ -50,6 +52,7 @@ export interface V1CollaboratorTable {
   resource_id: string;
   principal_id: string;
   principal_type: string;
+  created_time: ColumnType<Date, Date | undefined, never>;
 }
 
 export interface V1TableMetaTable {
@@ -124,6 +127,30 @@ export interface V1ViewTable {
   last_modified_time: ColumnType<Date | null, Date | null | undefined, Date | null | undefined>;
   deleted_time: ColumnType<Date | null, Date | null | undefined, Date | null | undefined>;
   created_by: string;
+  last_modified_by: string | null;
+}
+
+export interface V1PluginTable {
+  id: string;
+  name: string;
+  logo: string;
+  url: string | null;
+  status: string;
+  positions: string;
+  created_by: string;
+}
+
+export interface V1PluginInstallTable {
+  id: string;
+  plugin_id: string;
+  base_id: string;
+  name: string;
+  position_id: string;
+  position: string;
+  storage: string | null;
+  created_time: ColumnType<Date, Date | undefined, never>;
+  created_by: string;
+  last_modified_time: ColumnType<Date | null, Date | null | undefined, Date | null | undefined>;
   last_modified_by: string | null;
 }
 
@@ -239,7 +266,7 @@ export interface V1TaskTable {
 export interface V1TaskRunTable {
   id: string;
   task_id: string;
-  base_id: string | null;
+  base_id: string;
   status: string;
   snapshot: string;
   depends_on_run_ids: ColumnType<string[], string[] | undefined, string[] | undefined>;
@@ -247,7 +274,7 @@ export interface V1TaskRunTable {
   log: string | null;
   error_msg: string | null;
   started_time: ColumnType<Date | null, Date | null | undefined, Date | null | undefined>;
-  created_time: ColumnType<Date, Date | undefined, never>;
+  created_time: ColumnType<Date, Date | string | undefined, never>;
   last_modified_time: ColumnType<Date | null, Date | null | undefined, Date | null | undefined>;
 }
 
@@ -327,6 +354,8 @@ export interface V1TeableDatabase {
   table_meta: V1TableMetaTable;
   field: V1FieldTable;
   view: V1ViewTable;
+  plugin: V1PluginTable;
+  plugin_install: V1PluginInstallTable;
   reference: V1ReferenceTable;
   schema_operation: V1SchemaOperationTable;
   computed_update_outbox: V1ComputedUpdateOutboxTable;

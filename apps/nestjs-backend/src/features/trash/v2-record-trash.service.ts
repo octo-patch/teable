@@ -12,7 +12,7 @@ interface ITableTrashInsert {
   resource_type: string;
   snapshot: string;
   created_by: string;
-  created_time: Date;
+  created_time: string;
 }
 
 interface IRecordTrashInsert {
@@ -21,7 +21,12 @@ interface IRecordTrashInsert {
   record_id: string;
   snapshot: string;
   created_by: string;
-  created_time: Date;
+  created_time: string;
+  operation_id: string | null;
+  record_created_time: string | null;
+  record_created_by: string | null;
+  record_last_modified_time: string | null;
+  record_last_modified_by: string | null;
 }
 
 type TrashDbTransaction = {
@@ -62,7 +67,7 @@ export class V2RecordTrashService {
     const container = await this.v2ContainerService.getContainerForTable(tableId);
     const db = container.resolve(v2DataDbTokens.db) as TrashDbClient;
     const recordIds = records.map((record) => record.id);
-    const createdTime = new Date();
+    const createdTime = new Date().toISOString();
 
     await this.runInSpan(
       context,
@@ -97,6 +102,15 @@ export class V2RecordTrashService {
                   snapshot: JSON.stringify(record),
                   created_by: userId,
                   created_time: createdTime,
+                  operation_id: operationId ?? null,
+                  record_created_time: record.createdTime
+                    ? new Date(record.createdTime).toISOString()
+                    : null,
+                  record_created_by: record.createdBy ?? null,
+                  record_last_modified_time: record.lastModifiedTime
+                    ? new Date(record.lastModifiedTime).toISOString()
+                    : null,
+                  record_last_modified_by: record.lastModifiedBy ?? null,
                 }))
               )
               .execute();

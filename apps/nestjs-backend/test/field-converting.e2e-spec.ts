@@ -1679,6 +1679,47 @@ describe('OpenAPI Freely perform column transformations (e2e)', () => {
       expect(values[1]).toEqual(5);
     });
 
+    it.skipIf(!canRunCanaryV2)(
+      'should normalize converted rating values through the public v2 API T6518',
+      async () => {
+        const sourceField = await createField(table1.id, {
+          type: FieldType.Number,
+          name: 'Source Rating Value',
+        });
+        const sourceValues = [2.7, 4.6, 0, -3, 9, 3, 0.4];
+        const expectedValues = [3, 5, null, null, 5, 3, null];
+        const { records } = await createRecords(table1.id, {
+          records: sourceValues.map((value) => ({ fields: { [sourceField.id]: value } })),
+        });
+
+        const convertedField = await convertFieldByCanaryV2(table1.id, sourceField.id, {
+          type: FieldType.Rating,
+          options: {
+            icon: RatingIcon.Star,
+            color: Colors.YellowBright,
+            max: 5,
+          },
+        });
+        expect(convertedField.type).toEqual(FieldType.Rating);
+
+        for (const [index, record] of records.entries()) {
+          const convertedRecord = await getRecord(table1.id, record.id);
+          expect(convertedRecord.fields[sourceField.id] ?? null).toEqual(expectedValues[index]);
+
+          const expectedValue = expectedValues[index];
+          if (expectedValue !== null) {
+            const rewrittenRecord = await updateRecordByApi(
+              table1.id,
+              record.id,
+              sourceField.id,
+              expectedValue
+            );
+            expect(rewrittenRecord.fields[sourceField.id]).toEqual(expectedValue);
+          }
+        }
+      }
+    );
+
     it('should correctly update and maintain values when transitioning from a Rating field to a Number field', async () => {
       const sourceFieldRo: IFieldRo = {
         type: FieldType.Rating,

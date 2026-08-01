@@ -119,6 +119,8 @@ describe('TableSchemaUpdateVisitor coverage', () => {
     const errorMethods = [
       'visitTableByBaseId',
       'visitTableById',
+      'visitTableByViewId',
+      'visitTableWithViewIds',
       'visitTableByIncomingReferenceToTable',
       'visitTableByIds',
       'visitTableByNameLike',

@@ -1,11 +1,5 @@
-import { tableI18nKeys } from '@teable/i18n-keys';
-import {
-  domainError,
-  isDomainError,
-  type DomainError,
-  type Field,
-  type IExecutionContext,
-} from '@teable/v2-core';
+import { sdkErrorI18nKeys } from '@teable/i18n-keys';
+import { domainError, isDomainError, type DomainError, type Field } from '@teable/v2-core';
 
 export const describeError = (error: unknown): string => {
   if (isDomainError(error)) return error.message;
@@ -81,22 +75,6 @@ export interface WrapDatabaseErrorContext {
   fields?: ReadonlyArray<Field>;
 }
 
-const i18nOrFallback = (
-  t: IExecutionContext['$t'],
-  key: Parameters<NonNullable<IExecutionContext['$t']>>[0],
-  fallback: string,
-  options?: Record<string, unknown>
-): string => {
-  if (!t) {
-    return fallback;
-  }
-  try {
-    return t(key, options);
-  } catch {
-    return fallback;
-  }
-};
-
 /**
  * Extract the column name from a PostgreSQL not-null violation error.
  * PG includes the `column` property on 23502 errors.
@@ -146,30 +124,52 @@ const findFieldByColumn = (
   });
 };
 
+export const createSchemaUniqueViolationError = (
+  error: unknown,
+  tableName: string,
+  fields: ReadonlyArray<Field> | undefined
+): DomainError => {
+  const column = extractUniqueColumn(error, tableName);
+  const field = findFieldByColumn(column, fields);
+  const fieldId = field?.id().toString();
+  const fieldName = field?.name().toString();
+
+  return domainError.validation({
+    message: fieldName
+      ? `Cannot mark field "${fieldName}" as unique because existing records contain duplicate values.`
+      : 'Cannot mark this field as unique because existing records contain duplicate values.',
+    code: 'validation.field.unique_existing_values',
+    ...(field && { details: { fieldId, fieldName } }),
+    ...(fieldName && {
+      localization: {
+        i18nKey: sdkErrorI18nKeys.custom.fieldUniqueExistingValues,
+        context: { fieldName },
+      },
+    }),
+  });
+};
+
 export const createSchemaNotNullViolationError = (
   error: unknown,
-  fields: ReadonlyArray<Field> | undefined,
-  t?: IExecutionContext['$t']
+  fields: ReadonlyArray<Field> | undefined
 ): DomainError => {
   const column = extractNotNullColumn(error);
   const field = findFieldByColumn(column, fields);
   const fieldId = field?.id().toString();
   const fieldName = field?.name().toString();
-  const fallback = fieldName
-    ? `Cannot mark field "${fieldName}" as required because existing records contain empty values.`
-    : 'Cannot mark this field as required because existing records contain empty values.';
 
   return domainError.validation({
     message: fieldName
-      ? i18nOrFallback(
-          t,
-          tableI18nKeys.validation.field.requiredExistingValues,
-          fallback,
-          { fieldName }
-        )
-      : fallback,
-    code: 'validation.field.not_null',
+      ? `Cannot mark field "${fieldName}" as required because existing records contain empty values.`
+      : 'Cannot mark this field as required because existing records contain empty values.',
+    code: 'validation.field.required_existing_values',
     ...(field && { details: { fieldId, fieldName } }),
+    ...(fieldName && {
+      localization: {
+        i18nKey: sdkErrorI18nKeys.custom.fieldRequiredExistingValues,
+        context: { fieldName },
+      },
+    }),
   });
 };
 
@@ -180,29 +180,35 @@ export const createSchemaNotNullViolationError = (
 export const wrapDatabaseError = (
   error: unknown,
   operation: DatabaseOperation,
-  context: WrapDatabaseErrorContext,
-  t?: IExecutionContext['$t']
+  context: WrapDatabaseErrorContext
 ): DomainError => {
   // Check for link field unique constraint violation
   if (isLinkUniqueViolation(error)) {
     return domainError.validation({
-      message: i18nOrFallback(
-        t,
-        tableI18nKeys.validation.link.one_one_duplicate,
-        `Cannot complete ${operation}: the target record is already linked by another record in a one-to-one relationship`
-      ),
+      message: `Cannot complete ${operation}: the target record is already linked by another record in a one-to-one relationship`,
       code: 'validation.link.one_one_duplicate',
+      localization: { i18nKey: sdkErrorI18nKeys.custom.linkOneOneDuplicate },
     });
   }
 
+  // For unique / not-null violations the field may not resolve from the PG
+  // constraint metadata; without a field name there is nothing to interpolate,
+  // so no localization is attached and the client shows the English message.
   if (isUniqueViolation(error)) {
     const column = extractUniqueColumn(error, context.tableName);
     const field = findFieldByColumn(column, context.fields);
     const fieldId = field?.id().toString();
+    const fieldName = field?.name().toString();
     return domainError.validation({
       message: `Cannot complete ${operation}: field ${fieldId ?? ''} must have a unique value`,
       code: 'validation.field.unique',
-      ...(field && { details: { fieldId, fieldName: field.name().toString() } }),
+      ...(field && { details: { fieldId, fieldName } }),
+      ...(fieldName && {
+        localization: {
+          i18nKey: sdkErrorI18nKeys.custom.recordFieldValueDuplicate,
+          context: { fieldName },
+        },
+      }),
     });
   }
 
@@ -210,10 +216,17 @@ export const wrapDatabaseError = (
     const column = extractNotNullColumn(error);
     const field = findFieldByColumn(column, context.fields);
     const fieldId = field?.id().toString();
+    const fieldName = field?.name().toString();
     return domainError.validation({
       message: `Cannot complete ${operation}: field ${fieldId ?? ''} cannot be empty`,
       code: 'validation.field.not_null',
-      ...(field && { details: { fieldId, fieldName: field.name().toString() } }),
+      ...(field && { details: { fieldId, fieldName } }),
+      ...(fieldName && {
+        localization: {
+          i18nKey: sdkErrorI18nKeys.custom.recordFieldValueNotNull,
+          context: { fieldName },
+        },
+      }),
     });
   }
 

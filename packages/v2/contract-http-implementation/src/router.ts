@@ -1,12 +1,17 @@
 import { ORPCError, implement } from '@orpc/server';
 import type { IExplainService } from '@teable/v2-command-explain';
 import { v2CommandExplainTokens } from '@teable/v2-command-explain';
-import type { IHandlerResolver } from '@teable/v2-contract-http';
+import type {
+  HttpErrorStatus,
+  IApiErrorResponseDto,
+  IHandlerResolver,
+} from '@teable/v2-contract-http';
 import { v2Contract } from '@teable/v2-contract-http';
 import {
   ActorId,
   type ICommandBus,
   type IComputedActivityReader,
+  type IDomainErrorLocalization,
   type IExecutionContext,
   type IQueryBus,
   v2CoreTokens,
@@ -20,6 +25,7 @@ import { executeCreateRecordEndpoint } from './handlers/tables/createRecord';
 import { executeCreateRecordsEndpoint } from './handlers/tables/createRecords';
 import { executeCreateTableEndpoint } from './handlers/tables/createTable';
 import { executeCreateTablesEndpoint } from './handlers/tables/createTables';
+import { executeCreateViewEndpoint } from './handlers/tables/createView';
 import { executeDeleteByRangeEndpoint } from './handlers/tables/deleteByRange';
 import { executeDeleteFieldEndpoint } from './handlers/tables/deleteField';
 import { executeDeleteRecordsEndpoint } from './handlers/tables/deleteRecords';
@@ -36,13 +42,15 @@ import {
   executeExplainUpdateFieldEndpoint,
   executeExplainUpdateRecordEndpoint,
 } from './handlers/tables/explainCommand';
-import { executeGetRecordByIdEndpoint } from './handlers/tables/getRecordById';
 import { executeGetComputeActivityEndpoint } from './handlers/tables/getComputeActivity';
+import { executeGetRecordByIdEndpoint } from './handlers/tables/getRecordById';
 import { executeGetTableByIdEndpoint } from './handlers/tables/getTableById';
+import { executeGetViewEndpoint } from './handlers/tables/getView';
 import { executeImportCsvEndpoint } from './handlers/tables/importCsv';
 import { executeImportRecordsEndpoint } from './handlers/tables/importRecords';
 import { executeListTableRecordsEndpoint } from './handlers/tables/listTableRecords';
 import { executeListTablesEndpoint } from './handlers/tables/listTables';
+import { executeListViewsEndpoint } from './handlers/tables/listViews';
 import { executePasteEndpoint } from './handlers/tables/paste';
 import { executeRenameTableEndpoint } from './handlers/tables/renameTable';
 import { executeReorderRecordsEndpoint } from './handlers/tables/reorderRecords';
@@ -51,6 +59,30 @@ import { executeSubmitRecordEndpoint } from './handlers/tables/submitRecord';
 import { executeUpdateFieldEndpoint } from './handlers/tables/updateField';
 import { executeUpdateRecordEndpoint } from './handlers/tables/updateRecord';
 import { executeUpdateRecordsEndpoint } from './handlers/tables/updateRecords';
+import {
+  executeApplyViewManualSortEndpoint,
+  executeDeleteViewEndpoint,
+  executeDisableViewShareEndpoint,
+  executeDuplicateViewEndpoint,
+  executeEnableViewShareEndpoint,
+  executeGetViewFilterLinkRecordsEndpoint,
+  executeGetViewPluginInstallEndpoint,
+  executeGetViewSnapshotsEndpoint,
+  executeInstallViewPluginEndpoint,
+  executeListViewDocIdsEndpoint,
+  executeRefreshViewShareIdEndpoint,
+  executeRenameViewEndpoint,
+  executeUpdateViewColumnMetaEndpoint,
+  executeUpdateViewDescriptionEndpoint,
+  executeUpdateViewFilterEndpoint,
+  executeUpdateViewGroupEndpoint,
+  executeUpdateViewLockedEndpoint,
+  executeUpdateViewOptionsEndpoint,
+  executeUpdateViewOrderEndpoint,
+  executeUpdateViewPluginStorageEndpoint,
+  executeUpdateViewShareMetaEndpoint,
+  executeUpdateViewSortEndpoint,
+} from './handlers/tables/viewOperations';
 
 export interface IV2OrpcRouterOptions {
   createContainer?: () => IHandlerResolver | Promise<IHandlerResolver>;
@@ -113,6 +145,7 @@ export const createV2OrpcRouter = (options: IV2OrpcRouterOptions = {}) => {
       code: string;
       tags: readonly string[];
       details?: Record<string, unknown>;
+      localization?: IDomainErrorLocalization;
     }
   ): never => {
     throw new ORPCError(orpcCode, {
@@ -121,11 +154,66 @@ export const createV2OrpcRouter = (options: IV2OrpcRouterOptions = {}) => {
         domainCode: errorBody.code,
         domainTags: errorBody.tags,
         details: errorBody.details,
+        localization: errorBody.localization,
       },
     });
   };
 
   const os = implement(v2Contract);
+
+  type ViewRouteResult<TBody> =
+    | { status: 200; body: TBody }
+    | { status: HttpErrorStatus; body: IApiErrorResponseDto };
+
+  const unwrapViewRouteResult = <TBody>(result: ViewRouteResult<TBody>): TBody => {
+    if (result.status === 200) return result.body;
+    if (result.status === 400) throwDomainError('BAD_REQUEST', result.body.error);
+    if (result.status === 403) throwDomainError('FORBIDDEN', result.body.error);
+    if (result.status === 404) throwDomainError('NOT_FOUND', result.body.error);
+    return throwDomainError('INTERNAL_SERVER_ERROR', result.body.error);
+  };
+
+  const runViewCommandRoute = async <TInput, TBody>(
+    input: TInput,
+    execute: (
+      context: IExecutionContext,
+      input: TInput,
+      commandBus: ICommandBus
+    ) => Promise<ViewRouteResult<TBody>>
+  ): Promise<TBody> => {
+    const container = await resolveContainer();
+    let executionContext: IExecutionContext;
+    try {
+      executionContext = await createExecutionContext();
+    } catch {
+      throw new ORPCError('INTERNAL_SERVER_ERROR', {
+        message: executionContextErrorMessage,
+      });
+    }
+    const commandBus = container.resolve<ICommandBus>(v2CoreTokens.commandBus);
+    return unwrapViewRouteResult(await execute(executionContext, input, commandBus));
+  };
+
+  const runViewQueryRoute = async <TInput, TBody>(
+    input: TInput,
+    execute: (
+      context: IExecutionContext,
+      input: TInput,
+      queryBus: IQueryBus
+    ) => Promise<ViewRouteResult<TBody>>
+  ): Promise<TBody> => {
+    const container = await resolveContainer();
+    let executionContext: IExecutionContext;
+    try {
+      executionContext = await createExecutionContext();
+    } catch {
+      throw new ORPCError('INTERNAL_SERVER_ERROR', {
+        message: executionContextErrorMessage,
+      });
+    }
+    const queryBus = container.resolve<IQueryBus>(v2CoreTokens.queryBus);
+    return unwrapViewRouteResult(await execute(executionContext, input, queryBus));
+  };
 
   const basesCreate = os.bases.create.handler(async ({ input }) => {
     const container = await resolveContainer();
@@ -237,6 +325,34 @@ export const createV2OrpcRouter = (options: IV2OrpcRouterOptions = {}) => {
 
     const commandBus = container.resolve<ICommandBus>(v2CoreTokens.commandBus);
     const result = await executeCreateFieldEndpoint(executionContext, input, commandBus);
+
+    if (result.status === 200) return result.body;
+
+    if (result.status === 400) {
+      throwDomainError('BAD_REQUEST', result.body.error);
+    }
+
+    if (result.status === 404) {
+      throwDomainError('NOT_FOUND', result.body.error);
+    }
+
+    throwDomainError('INTERNAL_SERVER_ERROR', result.body.error);
+  });
+
+  const tablesCreateView = os.tables.createView.handler(async ({ input }) => {
+    const container = await resolveContainer();
+
+    let executionContext: IExecutionContext;
+    try {
+      executionContext = await createExecutionContext();
+    } catch {
+      throw new ORPCError('INTERNAL_SERVER_ERROR', {
+        message: executionContextErrorMessage,
+      });
+    }
+
+    const commandBus = container.resolve<ICommandBus>(v2CoreTokens.commandBus);
+    const result = await executeCreateViewEndpoint(executionContext, input, commandBus);
 
     if (result.status === 200) return result.body;
 
@@ -772,6 +888,34 @@ export const createV2OrpcRouter = (options: IV2OrpcRouterOptions = {}) => {
     throwDomainError('INTERNAL_SERVER_ERROR', result.body.error);
   });
 
+  const tablesGetView = os.tables.getView.handler(async ({ input }) => {
+    const container = await resolveContainer();
+
+    let executionContext: IExecutionContext;
+    try {
+      executionContext = await createExecutionContext();
+    } catch {
+      throw new ORPCError('INTERNAL_SERVER_ERROR', {
+        message: executionContextErrorMessage,
+      });
+    }
+
+    const queryBus = container.resolve<IQueryBus>(v2CoreTokens.queryBus);
+    const result = await executeGetViewEndpoint(executionContext, input, queryBus);
+
+    if (result.status === 200) return result.body;
+
+    if (result.status === 400) {
+      throwDomainError('BAD_REQUEST', result.body.error);
+    }
+
+    if (result.status === 404) {
+      throwDomainError('NOT_FOUND', result.body.error);
+    }
+
+    throwDomainError('INTERNAL_SERVER_ERROR', result.body.error);
+  });
+
   const tablesDelete = os.tables.delete.handler(async ({ input }) => {
     const container = await resolveContainer();
 
@@ -847,6 +991,34 @@ export const createV2OrpcRouter = (options: IV2OrpcRouterOptions = {}) => {
 
     if (result.status === 400) {
       throwDomainError('BAD_REQUEST', result.body.error);
+    }
+
+    throwDomainError('INTERNAL_SERVER_ERROR', result.body.error);
+  });
+
+  const tablesListViews = os.tables.listViews.handler(async ({ input }) => {
+    const container = await resolveContainer();
+
+    let executionContext: IExecutionContext;
+    try {
+      executionContext = await createExecutionContext();
+    } catch {
+      throw new ORPCError('INTERNAL_SERVER_ERROR', {
+        message: executionContextErrorMessage,
+      });
+    }
+
+    const queryBus = container.resolve<IQueryBus>(v2CoreTokens.queryBus);
+    const result = await executeListViewsEndpoint(executionContext, input, queryBus);
+
+    if (result.status === 200) return result.body;
+
+    if (result.status === 400) {
+      throwDomainError('BAD_REQUEST', result.body.error);
+    }
+
+    if (result.status === 404) {
+      throwDomainError('NOT_FOUND', result.body.error);
     }
 
     throwDomainError('INTERNAL_SERVER_ERROR', result.body.error);
@@ -1186,6 +1358,73 @@ export const createV2OrpcRouter = (options: IV2OrpcRouterOptions = {}) => {
     throwDomainError('INTERNAL_SERVER_ERROR', result.body.error);
   });
 
+  const tablesDeleteView = os.tables.deleteView.handler(({ input }) =>
+    runViewCommandRoute(input, executeDeleteViewEndpoint)
+  );
+  const tablesDuplicateView = os.tables.duplicateView.handler(({ input }) =>
+    runViewCommandRoute(input, executeDuplicateViewEndpoint)
+  );
+  const tablesRenameView = os.tables.renameView.handler(({ input }) =>
+    runViewCommandRoute(input, executeRenameViewEndpoint)
+  );
+  const tablesUpdateViewDescription = os.tables.updateViewDescription.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewDescriptionEndpoint)
+  );
+  const tablesUpdateViewLocked = os.tables.updateViewLocked.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewLockedEndpoint)
+  );
+  const tablesUpdateViewOrder = os.tables.updateViewOrder.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewOrderEndpoint)
+  );
+  const tablesUpdateViewColumnMeta = os.tables.updateViewColumnMeta.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewColumnMetaEndpoint)
+  );
+  const tablesUpdateViewFilter = os.tables.updateViewFilter.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewFilterEndpoint)
+  );
+  const tablesUpdateViewSort = os.tables.updateViewSort.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewSortEndpoint)
+  );
+  const tablesUpdateViewGroup = os.tables.updateViewGroup.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewGroupEndpoint)
+  );
+  const tablesUpdateViewOptions = os.tables.updateViewOptions.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewOptionsEndpoint)
+  );
+  const tablesApplyViewManualSort = os.tables.applyViewManualSort.handler(({ input }) =>
+    runViewCommandRoute(input, executeApplyViewManualSortEndpoint)
+  );
+  const tablesUpdateViewShareMeta = os.tables.updateViewShareMeta.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewShareMetaEndpoint)
+  );
+  const tablesRefreshViewShareId = os.tables.refreshViewShareId.handler(({ input }) =>
+    runViewCommandRoute(input, executeRefreshViewShareIdEndpoint)
+  );
+  const tablesEnableViewShare = os.tables.enableViewShare.handler(({ input }) =>
+    runViewCommandRoute(input, executeEnableViewShareEndpoint)
+  );
+  const tablesDisableViewShare = os.tables.disableViewShare.handler(({ input }) =>
+    runViewCommandRoute(input, executeDisableViewShareEndpoint)
+  );
+  const tablesGetViewFilterLinkRecords = os.tables.getViewFilterLinkRecords.handler(({ input }) =>
+    runViewQueryRoute(input, executeGetViewFilterLinkRecordsEndpoint)
+  );
+  const tablesGetViewSnapshots = os.tables.getViewSnapshots.handler(({ input }) =>
+    runViewQueryRoute(input, executeGetViewSnapshotsEndpoint)
+  );
+  const tablesListViewDocIds = os.tables.listViewDocIds.handler(({ input }) =>
+    runViewQueryRoute(input, executeListViewDocIdsEndpoint)
+  );
+  const tablesInstallViewPlugin = os.tables.installViewPlugin.handler(({ input }) =>
+    runViewCommandRoute(input, executeInstallViewPluginEndpoint)
+  );
+  const tablesGetViewPluginInstall = os.tables.getViewPluginInstall.handler(({ input }) =>
+    runViewQueryRoute(input, executeGetViewPluginInstallEndpoint)
+  );
+  const tablesUpdateViewPluginStorage = os.tables.updateViewPluginStorage.handler(({ input }) =>
+    runViewCommandRoute(input, executeUpdateViewPluginStorageEndpoint)
+  );
+
   return os.router({
     bases: {
       create: basesCreate,
@@ -1196,6 +1435,7 @@ export const createV2OrpcRouter = (options: IV2OrpcRouterOptions = {}) => {
       createTables: tablesCreateTables,
       duplicateTable: tablesDuplicateTable,
       createField: tablesCreateField,
+      createView: tablesCreateView,
       updateField: tablesUpdateField,
       explainCreateField: tablesExplainCreateField,
       explainUpdateField: tablesExplainUpdateField,
@@ -1219,10 +1459,34 @@ export const createV2OrpcRouter = (options: IV2OrpcRouterOptions = {}) => {
       getById: tablesGetById,
       getComputeActivity: tablesGetComputeActivity,
       getRecord: tablesGetRecord,
+      getView: tablesGetView,
       importCsv: tablesImportCsv,
       importRecords: tablesImportRecords,
       list: tablesList,
       listRecords: tablesListRecords,
+      listViews: tablesListViews,
+      deleteView: tablesDeleteView,
+      duplicateView: tablesDuplicateView,
+      renameView: tablesRenameView,
+      updateViewDescription: tablesUpdateViewDescription,
+      updateViewLocked: tablesUpdateViewLocked,
+      updateViewOrder: tablesUpdateViewOrder,
+      updateViewColumnMeta: tablesUpdateViewColumnMeta,
+      updateViewFilter: tablesUpdateViewFilter,
+      updateViewSort: tablesUpdateViewSort,
+      updateViewGroup: tablesUpdateViewGroup,
+      updateViewOptions: tablesUpdateViewOptions,
+      applyViewManualSort: tablesApplyViewManualSort,
+      updateViewShareMeta: tablesUpdateViewShareMeta,
+      refreshViewShareId: tablesRefreshViewShareId,
+      enableViewShare: tablesEnableViewShare,
+      disableViewShare: tablesDisableViewShare,
+      getViewFilterLinkRecords: tablesGetViewFilterLinkRecords,
+      getViewSnapshots: tablesGetViewSnapshots,
+      listViewDocIds: tablesListViewDocIds,
+      installViewPlugin: tablesInstallViewPlugin,
+      getViewPluginInstall: tablesGetViewPluginInstall,
+      updateViewPluginStorage: tablesUpdateViewPluginStorage,
       rename: tablesRename,
       explainCreateRecord: tablesExplainCreateRecord,
       explainUpdateRecord: tablesExplainUpdateRecord,

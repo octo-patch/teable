@@ -7,6 +7,7 @@ import { ViewColumnMetaUpdated } from '../../domain/table/events/ViewColumnMetaU
 import type { IEventDispatchScope, IEventHandler } from '../../ports/EventHandler';
 import type * as ExecutionContextPort from '../../ports/ExecutionContext';
 import * as TableMapperPort from '../../ports/mappers/TableMapper';
+import type { RealtimeChange } from '../../ports/RealtimeChange';
 import { RealtimeDocId } from '../../ports/RealtimeDocId';
 import * as RealtimeEnginePort from '../../ports/RealtimeEngine';
 import * as TableRepositoryPort from '../../ports/TableRepository';
@@ -33,7 +34,12 @@ const canUseColumnMetaSnapshot = (
 
   const fieldId = event.fieldId.toString();
   const fieldInSnapshot = Boolean(view.columnMeta[fieldId]);
-  return event.fieldInColumnMeta ? fieldInSnapshot : !fieldInSnapshot;
+  const fieldStateMatches = event.fieldInColumnMeta ? fieldInSnapshot : !fieldInSnapshot;
+  if (!fieldStateMatches) return false;
+  if (event.optionsChange) {
+    return JSON.stringify(view.options) === JSON.stringify(event.optionsChange.nextOptions);
+  }
+  return true;
 };
 
 const reserveViewColumnMetaRealtimeProjection = (
@@ -111,13 +117,21 @@ export class ViewColumnMetaUpdatedRealtimeProjection
             yield* (await realtimeEngine.ensure(context, docId, snapshot)).safeUnwrap();
 
             // Keep the table snapshot in sync for table-level consumers.
-            yield* (
-              await realtimeEngine.applyChange(context, docId, {
+            const tableChanges: RealtimeChange[] = [
+              {
                 type: 'set',
                 path: ['views', viewIndex, 'columnMeta'],
                 value: viewDto.columnMeta,
-              })
-            ).safeUnwrap();
+              },
+            ];
+            if (event.optionsChange) {
+              tableChanges.push({
+                type: 'set',
+                path: ['views', viewIndex, 'options'],
+                value: viewDto.options,
+              });
+            }
+            yield* (await realtimeEngine.applyChange(context, docId, tableChanges)).safeUnwrap();
 
             // Keep the standalone view document in sync for ShareDB/SDK view subscriptions.
             const viewCollection = `${viewCollectionPrefix}_${event.tableId.toString()}`;
@@ -127,18 +141,23 @@ export class ViewColumnMetaUpdatedRealtimeProjection
             ).safeUnwrap();
             yield* (await realtimeEngine.ensure(context, viewDocId, viewDto)).safeUnwrap();
 
-            return realtimeEngine.applyChange(
-              context,
-              viewDocId,
+            const viewChanges: RealtimeChange[] = [
               {
                 type: 'set',
                 path: ['columnMeta'],
                 value: viewDto.columnMeta,
               },
-              {
-                version: event.oldVersion,
-              }
-            );
+            ];
+            if (event.optionsChange) {
+              viewChanges.push({
+                type: 'set',
+                path: ['options'],
+                value: viewDto.options,
+              });
+            }
+            return realtimeEngine.applyChange(context, viewDocId, viewChanges, {
+              version: event.oldVersion,
+            });
           } finally {
             releasePending();
           }

@@ -2,6 +2,7 @@ import {
   ActorId,
   BaseId,
   DbFieldName,
+  DbFieldType,
   FormulaExpression,
   FieldId,
   FieldName,
@@ -2096,6 +2097,86 @@ describe('ComputedFieldUpdater', () => {
         'AS "__record_ids"("__id") ON "t"."__id" = "__record_ids"."__id"'
       );
       expect(query.sql).not.toContain('from "level_0", "level_1"');
+    }
+  });
+
+  it('chunks JSON-backed same-table formula batches below the dirty threshold', async () => {
+    const { baseId, table, plusOneFieldId, doubleFieldId } = createSameTableFormulaChainTable();
+    for (const fieldId of [plusOneFieldId, doubleFieldId]) {
+      table
+        .getField((field) => field.id().equals(fieldId))
+        ._unsafeUnwrap()
+        .setDbFieldType(DbFieldType.rehydrate('JSON')._unsafeUnwrap())
+        ._unsafeUnwrap();
+    }
+
+    const plan: ComputedUpdatePlan = {
+      baseId,
+      seedTableId: table.id(),
+      seedRecordIds: createSequentialRecordIds(265),
+      extraSeedRecords: [],
+      steps: [
+        { tableId: table.id(), fieldIds: [plusOneFieldId], level: 0 },
+        { tableId: table.id(), fieldIds: [doubleFieldId], level: 1 },
+      ],
+      edges: [],
+      estimatedComplexity: 2,
+      changeType: 'update',
+      sameTableBatches: [
+        {
+          tableId: table.id(),
+          steps: [
+            { tableId: table.id(), fieldIds: [plusOneFieldId], level: 0 },
+            { tableId: table.id(), fieldIds: [doubleFieldId], level: 1 },
+          ],
+          minLevel: 0,
+          maxLevel: 1,
+        },
+      ],
+    };
+
+    const { db, driver } = createRecordingDb();
+    const updater = new ComputedFieldUpdater(
+      createTableRepository([table]),
+      createLogger(),
+      db as unknown as Kysely<V1TeableDatabase>,
+      undefined,
+      createTypeValidationStrategy()
+    );
+    const updaterInternal = updater as unknown as {
+      getDirtyCountForTable: () => Promise<number>;
+      getDirtyRecordIdChunks: (
+        db: unknown,
+        tableId: unknown,
+        chunkSize?: number,
+        includeSingleton?: boolean
+      ) => Promise<ReadonlyArray<ReadonlyArray<string>>>;
+    };
+    updaterInternal.getDirtyCountForTable = async () => 265;
+    updaterInternal.getDirtyRecordIdChunks = async (_db, _tableId, chunkSize, includeSingleton) => {
+      expect(chunkSize).toBe(25);
+      expect(includeSingleton).toBe(true);
+      return Array.from({ length: 11 }, (_, chunkIndex) =>
+        Array.from(
+          { length: chunkIndex === 10 ? 15 : 25 },
+          (_, index) => `rec${(chunkIndex * 25 + index).toString().padStart(16, '0')}`
+        )
+      );
+    };
+
+    const result = await updater.execute(plan, {
+      actorId: ActorId.create(ACTOR_ID)._unsafeUnwrap(),
+    });
+    expect(result.isOk()).toBe(true);
+
+    const updateQueries = driver.queries.filter((query) =>
+      query.sql.startsWith('update "bseaaaaaaaaaaaaaaaa"."tblzzzzzzzzzzzzzzzz" as "u"')
+    );
+    expect(updateQueries).toHaveLength(11);
+    for (const query of updateQueries) {
+      expect(query.sql).toContain('AS "__record_ids"("__id")');
+      expect(query.sql).toContain('"level_0" AS MATERIALIZED');
+      expect(query.sql).toContain('"level_1" AS MATERIALIZED');
     }
   });
 

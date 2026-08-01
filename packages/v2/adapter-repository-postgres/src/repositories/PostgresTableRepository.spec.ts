@@ -57,6 +57,8 @@ import {
   TableUpdateViewColumnMetaSpec,
   TableSortKey,
   ViewColumnMeta,
+  ViewId,
+  ViewName,
   createSingleSelectField,
   v2CoreTokens,
   domainError,
@@ -451,6 +453,39 @@ describe('PostgresTableRepository (pg)', () => {
       ).toEqual([
         { name: 'Grid', type: 'grid' },
         { name: 'Kanban', type: 'kanban' },
+      ]);
+
+      const targetView = table.views()[1];
+      const selectiveSpec = table
+        .specs()
+        .byId(table.id())
+        .withViewId(targetView.id())
+        .build()
+        ._unsafeUnwrap();
+      const selectivelyLoaded = (await repo.findOne(context, selectiveSpec))._unsafeUnwrap();
+
+      expect(selectivelyLoaded.id().equals(table.id())).toBe(true);
+      expect(selectivelyLoaded.getFields()).toHaveLength(table.getFields().length);
+      expect(selectivelyLoaded.views()).toHaveLength(1);
+      expect(selectivelyLoaded.views()[0].id().equals(targetView.id())).toBe(true);
+      expect(selectivelyLoaded.views()[0].type().toString()).toBe('kanban');
+      expect(selectivelyLoaded.views()[0].version()._unsafeUnwrap().toNumber()).toBe(1);
+      expect(selectivelyLoaded.views()[0].auditMetadata()._unsafeUnwrap().toDto()).toMatchObject({
+        createdBy: actorId.toString(),
+        createdTime: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      });
+
+      const projectedViewIdsSpec = table
+        .specs()
+        .byId(table.id())
+        .withViewIds([targetView.id(), ViewId.create(`viw${'z'.repeat(16)}`)._unsafeUnwrap()])
+        .build()
+        ._unsafeUnwrap();
+      const projectedViews = (await repo.findOne(context, projectedViewIdsSpec))._unsafeUnwrap();
+
+      expect(projectedViews.id().equals(table.id())).toBe(true);
+      expect(projectedViews.views().map((view) => view.id().toString())).toEqual([
+        targetView.id().toString(),
       ]);
 
       const snapshotVisitor: IFieldVisitor<IFieldSnapshot> = new FieldToSnapshotVisitor();
@@ -2330,6 +2365,107 @@ describe('PostgresTableRepository (pg)', () => {
 
       expect(row?.version).toBe(2);
       expect(row?.column_meta).toContain('"width":320');
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it('rejects an update made from a stale Table aggregate View version', async () => {
+    const c = container.createChildContainer();
+    const db = await createPgDb(pgContainer.getConnectionUri());
+    await registerV2PostgresStateAdapter(c, {
+      db,
+      ensureSchema: true,
+    });
+    const repo = c.resolve<ITableRepository>(v2CoreTokens.tableRepository);
+
+    try {
+      const baseId = BaseId.generate()._unsafeUnwrap();
+      const actorId = ActorId.create('system')._unsafeUnwrap();
+      const context = { actorId };
+      const spaceId = `spc${getRandomString(16)}`;
+
+      await db
+        .insertInto('space')
+        .values({ id: spaceId, name: 'Stale View Space', created_by: actorId.toString() })
+        .execute();
+
+      await db
+        .insertInto('base')
+        .values({
+          id: baseId.toString(),
+          space_id: spaceId,
+          name: 'Stale View Base',
+          order: 1,
+          created_by: actorId.toString(),
+        })
+        .execute();
+
+      const builder = Table.builder()
+        .withBaseId(baseId)
+        .withName(TableName.create('Stale View Table')._unsafeUnwrap());
+      builder
+        .field()
+        .singleLineText()
+        .withName(FieldName.create('Title')._unsafeUnwrap())
+        .primary()
+        .done();
+      builder.view().defaultGrid().done();
+      const inserted = (
+        await repo.insert(context, builder.build()._unsafeUnwrap())
+      )._unsafeUnwrap();
+      const querySpec = inserted.specs().byId(inserted.id()).build()._unsafeUnwrap();
+      const firstAggregate = (await repo.findOne(context, querySpec))._unsafeUnwrap();
+      const staleAggregate = (await repo.findOne(context, querySpec))._unsafeUnwrap();
+      const viewId = firstAggregate.views()[0]!.id();
+
+      const firstRename = firstAggregate
+        .renameView(viewId, ViewName.create('First writer')._unsafeUnwrap())
+        ._unsafeUnwrap();
+      const firstPersist = (
+        await repo.updateOne(
+          context,
+          firstRename.updateResult.table,
+          firstRename.updateResult.mutateSpec
+        )
+      )._unsafeUnwrap();
+
+      expect(firstPersist).toEqual({
+        viewVersionChanges: [
+          {
+            viewId: viewId.toString(),
+            oldVersion: 1,
+            newVersion: 2,
+          },
+        ],
+      });
+
+      const staleRename = staleAggregate
+        .renameView(viewId, ViewName.create('Stale writer')._unsafeUnwrap())
+        ._unsafeUnwrap();
+      const stalePersist = await repo.updateOne(
+        context,
+        staleRename.updateResult.table,
+        staleRename.updateResult.mutateSpec
+      );
+
+      expect(stalePersist._unsafeUnwrapErr()).toMatchObject({
+        code: 'view.version_conflict',
+        tags: ['conflict'],
+        details: {
+          tableId: inserted.id().toString(),
+          viewId: viewId.toString(),
+          expectedVersion: 1,
+          actualVersion: 2,
+        },
+      });
+
+      const row = await db
+        .selectFrom('view')
+        .select(['name', 'version'])
+        .where('id', '=', viewId.toString())
+        .executeTakeFirstOrThrow();
+      expect(row).toMatchObject({ name: 'First writer', version: 2 });
     } finally {
       await db.destroy();
     }

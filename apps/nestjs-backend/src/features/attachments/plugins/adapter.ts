@@ -26,6 +26,7 @@ export default abstract class StorageAdapter {
       case UploadType.ChatFile:
       case UploadType.Automation:
       case UploadType.RecordHistory:
+      case UploadType.RecordRemoval:
         return storageConfig().privateBucket;
       case UploadType.Avatar:
       case UploadType.OAuth:
@@ -79,6 +80,8 @@ export default abstract class StorageAdapter {
         return 'record-history';
       case UploadType.SpaceAvatar:
         return 'space-avatar';
+      case UploadType.RecordRemoval:
+        return 'record-removal';
       default:
         throw new CustomHttpException('Invalid upload type', HttpErrorCode.VALIDATION_ERROR, {
           localization: {

@@ -13,11 +13,25 @@ import {
   type DomainError,
 } from '../../domain/shared/DomainError';
 import type { IDomainEvent } from '../../domain/shared/DomainEvent';
-import type { ISpecification } from '../../domain/shared/specification/ISpecification';
 import { flattenAndSpecs } from '../../domain/shared/specification/composeAndSpecs';
+import type { ISpecification } from '../../domain/shared/specification/ISpecification';
 import { FieldOptionsAdded } from '../../domain/table/events/FieldOptionsAdded';
 import { FieldUpdated } from '../../domain/table/events/FieldUpdated';
 import { ViewColumnMetaUpdated } from '../../domain/table/events/ViewColumnMetaUpdated';
+import { ViewCreated } from '../../domain/table/events/ViewCreated';
+import { ViewDescriptionUpdated } from '../../domain/table/events/ViewDescriptionUpdated';
+import { ViewFilterUpdated } from '../../domain/table/events/ViewFilterUpdated';
+import { ViewGroupUpdated } from '../../domain/table/events/ViewGroupUpdated';
+import { ViewLockedUpdated } from '../../domain/table/events/ViewLockedUpdated';
+import { ViewOptionsUpdated } from '../../domain/table/events/ViewOptionsUpdated';
+import { ViewOrderUpdated } from '../../domain/table/events/ViewOrderUpdated';
+import { ViewRenamed } from '../../domain/table/events/ViewRenamed';
+import { ViewShareDisabled } from '../../domain/table/events/ViewShareDisabled';
+import { ViewShareEnabled } from '../../domain/table/events/ViewShareEnabled';
+import { ViewShareIdRefreshed } from '../../domain/table/events/ViewShareIdRefreshed';
+import { ViewShareMetaUpdated } from '../../domain/table/events/ViewShareMetaUpdated';
+import { ViewSortUpdated } from '../../domain/table/events/ViewSortUpdated';
+import { ViewVersion } from '../../domain/table/views/ViewVersion';
 import {
   RemoveSymmetricLinkFieldSpec,
   UpdateLinkConfigSpec,
@@ -26,6 +40,7 @@ import {
 import type { ITableSpecVisitor } from '../../domain/table/specs/ITableSpecVisitor';
 import { TableAddFieldSpec } from '../../domain/table/specs/TableAddFieldSpec';
 import { TableAddFieldsSpec } from '../../domain/table/specs/TableAddFieldsSpec';
+import { TableAddViewSpec } from '../../domain/table/specs/TableAddViewSpec';
 import { TableDuplicateFieldSpec } from '../../domain/table/specs/TableDuplicateFieldSpec';
 import { TableRemoveFieldSpec } from '../../domain/table/specs/TableRemoveFieldSpec';
 import { TableUpdateFieldConstraintsSpec } from '../../domain/table/specs/TableUpdateFieldConstraintsSpec';
@@ -121,15 +136,19 @@ const mayRequirePhysicalSchemaRepair = (
     if (
       spec instanceof TableAddFieldSpec ||
       spec instanceof TableAddFieldsSpec ||
+      (spec instanceof TableAddViewSpec && spec.view().type().toString() === 'grid') ||
       spec instanceof TableDuplicateFieldSpec ||
       spec instanceof TableRemoveFieldSpec ||
       spec instanceof TableUpdateFieldDbFieldNameSpec ||
       spec instanceof TableUpdateFieldConstraintsSpec ||
-      spec instanceof UpdateLinkConfigSpec ||
       spec instanceof UpdateLinkRelationshipSpec ||
       spec instanceof RemoveSymmetricLinkFieldSpec
     ) {
       return true;
+    }
+
+    if (spec instanceof UpdateLinkConfigSpec) {
+      return spec.isRelationshipChanging() || spec.isOneWayChanging();
     }
 
     return spec instanceof TableUpdateFieldTypeSpec && spec.isTypeConversion();
@@ -232,6 +251,7 @@ export class TableUpdateFlow {
               latestTable,
               mutateSpec
             );
+            handler.applyPersistedViewVersions(latestTable, tableUpdatePersistResult);
             tableMetadataPersisted = true;
             const dataPhaseResult = yield* await handler.unitOfWork.withTransaction(
               metaTransactionContext,
@@ -388,6 +408,25 @@ export class TableUpdateFlow {
     });
   }
 
+  /**
+   * The persisted view versions advanced during this update; sync the aggregate
+   * instance we return so a follow-up update reusing it (e.g. dependent-field
+   * cleanup after a field delete) does not fail the optimistic view-version
+   * guard with a stale expectation.
+   */
+  private applyPersistedViewVersions(
+    table: Table,
+    persistResult: TableRepositoryPort.TableUpdatePersistResult | void
+  ): void {
+    for (const change of persistResult?.viewVersionChanges ?? []) {
+      const viewResult = table.getViewById(change.viewId);
+      if (viewResult.isErr()) continue;
+      const versionResult = ViewVersion.rehydrate(change.newVersion);
+      if (versionResult.isErr()) continue;
+      viewResult.value.advanceVersion(versionResult.value);
+    }
+  }
+
   private attachPersistedEventVersions(
     events: ReadonlyArray<IDomainEvent>,
     persistResult: TableRepositoryPort.TableUpdatePersistResult | void
@@ -477,6 +516,240 @@ export class TableUpdateFlow {
           viewId: event.viewId,
           fieldId: event.fieldId,
           fieldInColumnMeta: event.fieldInColumnMeta,
+          changes: event.changes,
+          optionsChange: event.optionsChange,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewCreated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewCreated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewRenamed) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewRenamed.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousName: event.previousName,
+          nextName: event.nextName,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewDescriptionUpdated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewDescriptionUpdated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousDescription: event.previousDescription,
+          nextDescription: event.nextDescription,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewFilterUpdated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewFilterUpdated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousFilter: event.previousFilter,
+          nextFilter: event.nextFilter,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewSortUpdated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewSortUpdated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousSort: event.previousSort,
+          nextSort: event.nextSort,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewGroupUpdated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewGroupUpdated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousGroup: event.previousGroup,
+          nextGroup: event.nextGroup,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewOptionsUpdated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewOptionsUpdated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousOptions: event.previousOptions,
+          nextOptions: event.nextOptions,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewShareMetaUpdated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewShareMetaUpdated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousShareMeta: event.previousShareMeta,
+          nextShareMeta: event.nextShareMeta,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewShareIdRefreshed) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewShareIdRefreshed.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousShareId: event.previousShareId,
+          nextShareId: event.nextShareId,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewShareEnabled) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewShareEnabled.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          shareId: event.shareId,
+          shareMeta: event.shareMeta,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewShareDisabled) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewShareDisabled.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousShareId: event.previousShareId,
+          shareMeta: event.shareMeta,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewLockedUpdated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewLockedUpdated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousIsLocked: event.previousIsLocked,
+          nextIsLocked: event.nextIsLocked,
+          oldVersion: versionChange.oldVersion,
+          newVersion: versionChange.newVersion,
+        });
+      }
+
+      if (event instanceof ViewOrderUpdated) {
+        if (event.oldVersion != null && event.newVersion != null) {
+          return event;
+        }
+        const queue = queueByViewId.get(event.viewId.toString());
+        const versionChange = queue?.shift();
+        if (!versionChange) return event;
+        return ViewOrderUpdated.create({
+          tableId: event.tableId,
+          baseId: event.baseId,
+          viewId: event.viewId,
+          previousOrder: event.previousOrder,
+          nextOrder: event.nextOrder,
           oldVersion: versionChange.oldVersion,
           newVersion: versionChange.newVersion,
         });

@@ -48,6 +48,7 @@ export {
   type IComputeActivityState,
 } from './use-compute-activity';
 export * from './use-undo-redo';
+export * from './use-collaborator-filter-users';
 export * from './use-comment-count-map';
 export * from './use-organization';
 export * from './use-personal-view';

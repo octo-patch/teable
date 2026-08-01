@@ -8,6 +8,7 @@ import { PageLimit } from '../domain/shared/pagination/PageLimit';
 import { PageOffset } from '../domain/shared/pagination/PageOffset';
 import { type FieldKeyType, fieldKeyTypeSchema } from '../domain/table/fields/FieldKeyType';
 import { TableId } from '../domain/table/TableId';
+import type { RecordQueryPluginScope } from '../ports/RecordQueryPlugin';
 import type {
   IRecordReadQuerySource,
   IRecordSearchAccessPath,
@@ -77,8 +78,22 @@ export type IListTableRecordsQueryInput = z.input<typeof listTableRecordsInputSc
 type IListTableRecordsQueryOutput = z.output<typeof listTableRecordsInputSchema>;
 
 export interface IListTableRecordsQueryOptions {
+  /** Trusted host-only switch for grouped count metadata. */
+  readonly includeGroupMetadata?: boolean;
+  /** Trusted host-only cap for leaf group buckets. */
+  readonly groupLimit?: number;
+  /**
+   * Preferred pure-V2 permission scope (row filter + field allow-list + masks).
+   * When set, handlers should not depend on outer permission CTEs.
+   */
+  readonly queryScope?: RecordQueryPluginScope;
+  /**
+   * @deprecated Prefer {@link queryScope}. Kept for transitional CTE-based reads.
+   */
   readonly recordReadQuerySource?: IRecordReadQuerySource;
   readonly recordSearchAccessPath?: IRecordSearchAccessPath;
+  readonly includeSearchFieldMatches?: boolean;
+  readonly searchIndexMode?: 'matched' | 'view';
 }
 
 export class ListTableRecordsQuery {
@@ -95,8 +110,13 @@ export class ListTableRecordsQuery {
     readonly selectedRecordIds?: ReadonlyArray<string>,
     readonly projection?: ReadonlyArray<string>,
     readonly includeTotal?: boolean,
+    readonly includeSearchFieldMatches?: boolean,
+    readonly searchIndexMode?: 'matched' | 'view',
+    readonly includeGroupMetadata?: boolean,
+    readonly groupLimit?: number,
     readonly viewId?: string,
     readonly ignoreViewQuery?: boolean,
+    readonly queryScope?: RecordQueryPluginScope,
     readonly recordReadQuerySource?: IRecordReadQuerySource,
     readonly recordSearchAccessPath?: IRecordSearchAccessPath
   ) {}
@@ -131,9 +151,15 @@ export class ListTableRecordsQuery {
             parsed.data.selectedRecordIds,
             parsed.data.projection,
             parsed.data.includeTotal,
+            options?.includeSearchFieldMatches,
+            options?.searchIndexMode,
+            options?.includeGroupMetadata,
+            options?.groupLimit,
             parsed.data.viewId,
             parsed.data.ignoreViewQuery,
-            options?.recordReadQuerySource,
+            options?.queryScope,
+            // Prefer queryScope: do not pass CTE source when scope is present.
+            options?.queryScope ? undefined : options?.recordReadQuerySource,
             options?.recordSearchAccessPath
           )
       )

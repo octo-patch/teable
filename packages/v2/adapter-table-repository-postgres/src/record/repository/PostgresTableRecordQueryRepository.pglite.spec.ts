@@ -3,14 +3,28 @@ import { PGlite } from '@electric-sql/pglite';
 import {
   ActorId,
   BaseId,
+  CellValueMultiplicity,
+  CellValueType,
   DbFieldName,
+  DateFormattingPreset,
+  DateTimeFormatting,
+  DbFieldType,
+  FieldHasError,
   FieldId,
   FieldName,
+  FormulaExpression,
+  OffsetPagination,
+  PageLimit,
+  PageOffset,
+  RecordSearch,
   RecordByIdsSpec,
   RecordId,
+  SelectOption,
   Table,
   TableId,
   TableName,
+  TimeFormatting,
+  UserMultiplicity,
   type ILogger,
   type ITableRepository,
 } from '@teable/v2-core';
@@ -28,6 +42,7 @@ import {
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { TableRecordQueryBuilderManager } from '../query-builder';
+import { PostgresCollaboratorDirectoryService } from './PostgresCollaboratorDirectoryService';
 import { PostgresTableRecordQueryRepository } from './PostgresTableRecordQueryRepository';
 
 class RecordingDriver {
@@ -123,6 +138,9 @@ const createLogger = (): ILogger => {
 type SeededRow = {
   name: string;
   age: number;
+  status?: string | null;
+  staleComputed?: string | null;
+  date?: string | null;
 };
 
 const setupRepositoryFixture = async ({
@@ -130,16 +148,25 @@ const setupRepositoryFixture = async ({
   createdSchemas,
   seed,
   rows,
+  statusOptions,
+  includeErroredFormula,
+  dateFieldTimeZone,
 }: {
   db: Kysely<V1TeableDatabase>;
   createdSchemas: string[];
   seed: string;
   rows: ReadonlyArray<SeededRow>;
+  statusOptions?: ReadonlyArray<string>;
+  includeErroredFormula?: boolean;
+  dateFieldTimeZone?: string;
 }) => {
   const baseId = BaseId.create(createId('bse', seed))._unsafeUnwrap();
   const tableId = TableId.create(createId('tbl', seed))._unsafeUnwrap();
   const nameFieldId = FieldId.create(createId('fld', `n-${seed}`))._unsafeUnwrap();
   const ageFieldId = FieldId.create(createId('fld', `a-${seed}`))._unsafeUnwrap();
+  const statusFieldId = FieldId.create(createId('fld', `s-${seed}`))._unsafeUnwrap();
+  const formulaFieldId = FieldId.create(createId('fld', `f-${seed}`))._unsafeUnwrap();
+  const dateFieldId = FieldId.create(createId('fld', `d-${seed}`))._unsafeUnwrap();
 
   const builder = Table.builder()
     .withBaseId(baseId)
@@ -158,6 +185,45 @@ const setupRepositoryFixture = async ({
     .withId(ageFieldId)
     .withName(FieldName.create('Age')._unsafeUnwrap())
     .done();
+  if (statusOptions?.length) {
+    builder
+      .field()
+      .singleSelect()
+      .withId(statusFieldId)
+      .withName(FieldName.create('Status')._unsafeUnwrap())
+      .withOptions(
+        statusOptions.map((name) => SelectOption.create({ name, color: 'blue' })._unsafeUnwrap())
+      )
+      .done();
+  }
+  if (dateFieldTimeZone) {
+    builder
+      .field()
+      .date()
+      .withId(dateFieldId)
+      .withName(FieldName.create('Due')._unsafeUnwrap())
+      .withFormatting(
+        DateTimeFormatting.create({
+          date: 'YYYY-MM-DD',
+          time: TimeFormatting.None,
+          timeZone: dateFieldTimeZone,
+        })._unsafeUnwrap()
+      )
+      .done();
+  }
+  if (includeErroredFormula) {
+    builder
+      .field()
+      .formula()
+      .withId(formulaFieldId)
+      .withName(FieldName.create('Broken formula')._unsafeUnwrap())
+      .withExpression(FormulaExpression.create(`{${nameFieldId.toString()}}`)._unsafeUnwrap())
+      .withResultType({
+        cellValueType: CellValueType.string(),
+        isMultipleCellValue: CellValueMultiplicity.single(),
+      })
+      .done();
+  }
   builder.view().defaultGrid().done();
 
   const table = builder.build()._unsafeUnwrap();
@@ -171,6 +237,30 @@ const setupRepositoryFixture = async ({
     ._unsafeUnwrap()
     .setDbFieldName(DbFieldName.rehydrate('col_age')._unsafeUnwrap())
     ._unsafeUnwrap();
+  if (statusOptions?.length) {
+    table
+      .getField((field) => field.id().equals(statusFieldId))
+      ._unsafeUnwrap()
+      .setDbFieldName(DbFieldName.rehydrate('col_status')._unsafeUnwrap())
+      ._unsafeUnwrap();
+  }
+  if (dateFieldTimeZone) {
+    table
+      .getField((field) => field.id().equals(dateFieldId))
+      ._unsafeUnwrap()
+      .setDbFieldName(DbFieldName.rehydrate('col_date')._unsafeUnwrap())
+      ._unsafeUnwrap();
+  }
+  if (includeErroredFormula) {
+    const formulaField = table
+      .getField((field) => field.id().equals(formulaFieldId))
+      ._unsafeUnwrap();
+    formulaField
+      .setDbFieldName(DbFieldName.rehydrate('col_broken_formula')._unsafeUnwrap())
+      ._unsafeUnwrap();
+    formulaField.setDbFieldType(DbFieldType.rehydrate('TEXT')._unsafeUnwrap())._unsafeUnwrap();
+    formulaField.setHasError(FieldHasError.error());
+  }
 
   const schemaName = baseId.toString();
   const tableName = tableId.toString();
@@ -188,7 +278,10 @@ const setupRepositoryFixture = async ({
       __last_modified_time timestamptz,
       __last_modified_by text,
       col_name text,
-      col_age integer
+      col_age integer,
+      col_status text,
+      col_broken_formula text,
+      col_date timestamptz
     )
   `.execute(db);
 
@@ -206,7 +299,10 @@ const setupRepositoryFixture = async ({
         __last_modified_time,
         __last_modified_by,
         col_name,
-        col_age
+        col_age,
+        col_status,
+        col_broken_formula,
+        col_date
       )
       VALUES (
         ${recordId},
@@ -217,7 +313,10 @@ const setupRepositoryFixture = async ({
         ${'2025-01-02T00:00:00.000Z'},
         ${'usr_modifier'},
         ${row.name},
-        ${row.age}
+        ${row.age},
+        ${row.status ?? null},
+        ${row.staleComputed ?? null},
+        ${row.date ?? null}
       )
     `.execute(db);
   }
@@ -236,6 +335,9 @@ const setupRepositoryFixture = async ({
     table,
     nameFieldId,
     ageFieldId,
+    statusFieldId,
+    formulaFieldId,
+    dateFieldId,
     insertedRecordIds,
   };
 };
@@ -404,6 +506,199 @@ describe('PostgresTableRecordQueryRepository projection (pglite)', () => {
     expect(record.fields).not.toHaveProperty(ageFieldId.toString());
   });
 
+  it('extracts distinct IDs from single and multiple User Fields within the Record scope', async () => {
+    const seed = 'collaborators';
+    const baseId = BaseId.create(createId('bse', seed))._unsafeUnwrap();
+    const tableId = TableId.create(createId('tbl', seed))._unsafeUnwrap();
+    const nameFieldId = FieldId.create(createId('fld', 'collab-name'))._unsafeUnwrap();
+    const ownerFieldId = FieldId.create(createId('fld', 'collab-owner'))._unsafeUnwrap();
+    const teamFieldId = FieldId.create(createId('fld', 'collab-team'))._unsafeUnwrap();
+    const builder = Table.builder()
+      .withBaseId(baseId)
+      .withId(tableId)
+      .withName(TableName.create('Collaborator records')._unsafeUnwrap());
+    builder
+      .field()
+      .singleLineText()
+      .withId(nameFieldId)
+      .withName(FieldName.create('Name')._unsafeUnwrap())
+      .primary()
+      .done();
+    builder
+      .field()
+      .user()
+      .withId(ownerFieldId)
+      .withName(FieldName.create('Owner')._unsafeUnwrap())
+      .done();
+    builder
+      .field()
+      .user()
+      .withId(teamFieldId)
+      .withName(FieldName.create('Team')._unsafeUnwrap())
+      .withMultiplicity(UserMultiplicity.multiple())
+      .done();
+    builder.view().defaultGrid().done();
+    const table = builder.build()._unsafeUnwrap();
+    for (const [fieldId, dbFieldName] of [
+      [nameFieldId, 'col_name'],
+      [ownerFieldId, 'col_owner'],
+      [teamFieldId, 'col_team'],
+    ] as const) {
+      table
+        .getField((field) => field.id().equals(fieldId))
+        ._unsafeUnwrap()
+        .setDbFieldName(DbFieldName.rehydrate(dbFieldName)._unsafeUnwrap())
+        ._unsafeUnwrap();
+    }
+
+    const schemaName = baseId.toString();
+    const fullTableName = `${schemaName}.${tableId.toString()}`;
+    createdSchemas.push(schemaName);
+    await sql`CREATE SCHEMA ${sql.id(schemaName)}`.execute(db);
+    await sql`
+      CREATE TABLE ${sql.table(fullTableName)} (
+        __id text PRIMARY KEY,
+        __version integer NOT NULL,
+        __auto_number integer,
+        __created_time timestamptz,
+        __created_by text,
+        __last_modified_time timestamptz,
+        __last_modified_by text,
+        col_name text,
+        col_owner jsonb,
+        col_team jsonb
+      )
+    `.execute(db);
+    const firstRecordId = createId('rec', 'collab-first');
+    const secondRecordId = createId('rec', 'collab-second');
+    await sql`
+      INSERT INTO ${sql.table(fullTableName)} (
+        __id, __version, col_name, col_owner, col_team
+      ) VALUES
+        (
+          ${firstRecordId}, 1, 'First',
+          ${JSON.stringify({ id: 'usr1', title: 'Alice' })}::jsonb,
+          ${JSON.stringify([
+            { id: 'usr1', title: 'Alice' },
+            { id: 'usr2', title: 'Bob' },
+          ])}::jsonb
+        ),
+        (
+          ${secondRecordId}, 1, 'Second',
+          ${JSON.stringify({ id: 'usr1', title: 'Alice' })}::jsonb,
+          ${JSON.stringify([
+            { id: 'usr2', title: 'Bob' },
+            { id: 'usr3', title: 'Carol' },
+          ])}::jsonb
+        )
+    `.execute(db);
+    const manager = new TableRecordQueryBuilderManager(
+      db,
+      {} as unknown as ITableRepository,
+      new Pg16TypeValidationStrategy()
+    );
+    const repository = new PostgresTableRecordQueryRepository(manager, db, createLogger());
+    const context = { actorId: ActorId.create('tester')._unsafeUnwrap() };
+    const ownerField = table
+      .getField((field) => field.id().equals(ownerFieldId))
+      ._unsafeUnwrap() as Parameters<typeof repository.findDistinctUserIds>[2];
+    const teamField = table
+      .getField((field) => field.id().equals(teamFieldId))
+      ._unsafeUnwrap() as Parameters<typeof repository.findDistinctUserIds>[2];
+    const firstRecordSpec = RecordByIdsSpec.create([
+      RecordId.create(firstRecordId)._unsafeUnwrap(),
+    ]);
+
+    expect(
+      [...(await repository.findDistinctUserIds(context, table, ownerField))._unsafeUnwrap()].sort()
+    ).toEqual(['usr1']);
+    expect(
+      [
+        ...(
+          await repository.findDistinctUserIds(context, table, teamField, firstRecordSpec)
+        )._unsafeUnwrap(),
+      ].sort()
+    ).toEqual(['usr1', 'usr2']);
+    expect(driver.queries.at(-1)?.sql).toContain('jsonb_array_elements');
+  });
+
+  it('lists Base/Space collaborators by name only and excludes system users', async () => {
+    await sql`
+      CREATE TABLE users (
+        id text PRIMARY KEY,
+        name text NOT NULL,
+        email text,
+        avatar text,
+        is_system boolean
+      )
+    `.execute(db);
+    await sql`
+      CREATE TABLE "base" (
+        id text PRIMARY KEY,
+        space_id text NOT NULL
+      )
+    `.execute(db);
+    await sql`
+      CREATE TABLE collaborator (
+        id text PRIMARY KEY,
+        resource_type text NOT NULL,
+        resource_id text NOT NULL,
+        principal_id text NOT NULL,
+        principal_type text NOT NULL,
+        created_time timestamptz NOT NULL
+      )
+    `.execute(db);
+    const baseId = BaseId.create(createId('bse', 'directory'))._unsafeUnwrap();
+    const spaceId = createId('spc', 'directory');
+    await sql`
+      INSERT INTO "base" (id, space_id) VALUES (${baseId.toString()}, ${spaceId})
+    `.execute(db);
+    await sql`
+      INSERT INTO users (id, name, email, avatar, is_system) VALUES
+        ('usr-alice', 'Alice', 'private-alice@example.com', 'alice.png', false),
+        ('usr-bob', 'Bob', 'private-bob@example.com', NULL, NULL),
+        ('usr-system', 'System', 'system@example.com', NULL, true)
+    `.execute(db);
+    await sql`
+      INSERT INTO collaborator (
+        id, resource_type, resource_id, principal_id, principal_type, created_time
+      ) VALUES
+        ('clb-alice', 'base', ${baseId.toString()}, 'usr-alice', 'user', '2025-01-03'),
+        ('clb-bob', 'space', ${spaceId}, 'usr-bob', 'user', '2025-01-02'),
+        ('clb-system', 'space', ${spaceId}, 'usr-system', 'user', '2025-01-01')
+    `.execute(db);
+    const service = new PostgresCollaboratorDirectoryService(db);
+    const context = { actorId: ActorId.create('tester')._unsafeUnwrap() };
+    const firstPage = OffsetPagination.create(
+      PageLimit.create(1)._unsafeUnwrap(),
+      PageOffset.zero()
+    );
+    const defaultPage = OffsetPagination.create(
+      PageLimit.create(50)._unsafeUnwrap(),
+      PageOffset.zero()
+    );
+
+    expect(
+      (await service.listBaseUsers(context, baseId, { pagination: firstPage }))._unsafeUnwrap()
+    ).toEqual([{ id: 'usr-alice', name: 'Alice', avatar: 'alice.png' }]);
+    expect(
+      (
+        await service.listBaseUsers(context, baseId, {
+          pagination: defaultPage,
+          search: 'private-alice@example.com',
+        })
+      )._unsafeUnwrap()
+    ).toEqual([]);
+    expect(
+      (
+        await service.listUsersByIds(context, ['usr-alice', 'usr-bob', 'usr-alice'], {
+          pagination: defaultPage,
+          search: 'Bob',
+        })
+      )._unsafeUnwrap()
+    ).toEqual([{ id: 'usr-bob', name: 'Bob', avatar: null }]);
+  });
+
   it('keeps an empty projection as id-only instead of falling back to all fields', async () => {
     const fixture = await setupRepositoryFixture({
       db,
@@ -475,6 +770,143 @@ describe('PostgresTableRecordQueryRepository projection (pglite)', () => {
     ]);
   });
 
+  it('aggregates ordered group counts inside the filtered record scope', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'group-counts',
+      rows: [
+        { name: 'A', age: 10 },
+        { name: 'B', age: 20 },
+        { name: 'C', age: 20 },
+        { name: 'D', age: 30 },
+      ],
+    });
+    const allowedIds = fixture.insertedRecordIds.slice(1);
+
+    const result = await fixture.repository.find(
+      fixture.context,
+      fixture.table,
+      RecordByIdsSpec.create(allowedIds.map((id) => RecordId.create(id)._unsafeUnwrap())),
+      {
+        mode: 'stored',
+        includeTotal: true,
+        groupBy: [{ fieldId: fixture.ageFieldId, direction: 'desc' }],
+        groupLimit: 5_000,
+      }
+    );
+
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) return;
+    expect(result.value.total).toBe(3);
+    expect(result.value.groups).toEqual([
+      { fields: { [fixture.ageFieldId.toString()]: 30 }, count: 1 },
+      { fields: { [fixture.ageFieldId.toString()]: 20 }, count: 2 },
+    ]);
+    expect(driver.queries.some((query) => query.sql.includes('group by'))).toBe(true);
+  });
+
+  it('groups errored computed fields as null instead of stale stored values', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'errored-group',
+      includeErroredFormula: true,
+      rows: [
+        { name: 'A', age: 10, staleComputed: 'stale-a' },
+        { name: 'B', age: 20, staleComputed: 'stale-b' },
+      ],
+    });
+
+    const result = await fixture.repository.find(fixture.context, fixture.table, undefined, {
+      mode: 'stored',
+      includeTotal: false,
+      groupBy: [{ fieldId: fixture.formulaFieldId, direction: 'asc' }],
+      groupLimit: 5_000,
+    });
+
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) return;
+    expect(result.value.groups).toEqual([
+      { fields: { [fixture.formulaFieldId.toString()]: null }, count: 2 },
+    ]);
+    const groupQuery = driver.queries.find((query) => query.sql.includes('group by'));
+    expect(groupQuery?.sql).toContain('NULL::text');
+    expect(groupQuery?.sql).not.toContain('"t"."col_broken_formula"');
+  });
+
+  it('orders single-select groups by configured option order with v1 null semantics', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'group-select-order',
+      statusOptions: ['Done', 'Blocked', 'Open'],
+      rows: [
+        { name: 'A', age: 10, status: 'Open' },
+        { name: 'B', age: 20, status: null },
+        { name: 'C', age: 30, status: 'Done' },
+        { name: 'D', age: 40, status: 'Blocked' },
+      ],
+    });
+
+    const result = await fixture.repository.find(fixture.context, fixture.table, undefined, {
+      mode: 'stored',
+      includeTotal: false,
+      groupBy: [{ fieldId: fixture.statusFieldId, direction: 'asc' }],
+      groupLimit: 5_000,
+    });
+
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) return;
+    expect(result.value.total).toBe(4);
+    expect(
+      result.value.groups?.map((group) => group.fields[fixture.statusFieldId.toString()])
+    ).toEqual([null, 'Done', 'Blocked', 'Open']);
+  });
+
+  it('buckets date groups at the field formatting granularity in its time zone', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'group-date-bucket',
+      dateFieldTimeZone: 'Asia/Shanghai',
+      rows: [
+        // 2026-06-02 02:00 and 10:00 local (+08): same local day, one bucket.
+        { name: 'A', age: 10, date: '2026-06-01T18:00:00.000Z' },
+        { name: 'B', age: 20, date: '2026-06-02T02:00:00.000Z' },
+        // 2026-06-03 04:00 local: next day.
+        { name: 'C', age: 30, date: '2026-06-02T20:00:00.000Z' },
+        { name: 'D', age: 40, date: null },
+      ],
+    });
+
+    const result = await fixture.repository.find(fixture.context, fixture.table, undefined, {
+      mode: 'stored',
+      includeTotal: false,
+      groupBy: [{ fieldId: fixture.dateFieldId, direction: 'asc' }],
+      groupLimit: 5_000,
+    });
+
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) return;
+
+    const groups = result.value.groups?.map((group) => {
+      const value = group.fields[fixture.dateFieldId.toString()];
+      return {
+        value: value == null ? null : new Date(value as string).toISOString(),
+        count: group.count,
+      };
+    });
+    // Day buckets keyed as timestamptz of local midnight (V1 parity).
+    expect(groups).toEqual([
+      { value: null, count: 1 },
+      { value: '2026-06-01T16:00:00.000Z', count: 2 },
+      { value: '2026-06-02T16:00:00.000Z', count: 1 },
+    ]);
+    const groupQuery = driver.queries.find((query) => query.sql.includes('group by'));
+    expect(groupQuery?.sql).toContain('date_trunc');
+  });
+
   it('re-checks view row order column existence after it is created', async () => {
     const fixture = await setupRepositoryFixture({
       db,
@@ -524,6 +956,87 @@ describe('PostgresTableRecordQueryRepository projection (pglite)', () => {
       fixture.insertedRecordIds[0],
       fixture.insertedRecordIds[1],
     ]);
+  });
+
+  it('projects matched fields with search-result row numbering', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'search-match-index',
+      rows: [
+        { name: 'Alpha', age: 10 },
+        { name: 'Beta', age: 20 },
+        { name: 'Alpha two', age: 30 },
+      ],
+    });
+    const search = {
+      search: RecordSearch.fromTuple(['Alpha', fixture.nameFieldId.toString(), true]),
+      visibleFieldIds: [fixture.nameFieldId],
+    };
+    const pagination = OffsetPagination.create(
+      PageLimit.create(1)._unsafeUnwrap(),
+      PageOffset.create(1)._unsafeUnwrap()
+    );
+
+    const result = await fixture.repository.find(fixture.context, fixture.table, undefined, {
+      mode: 'stored',
+      includeTotal: false,
+      pagination,
+      search,
+      includeSearchFieldMatches: true,
+      searchIndexMode: 'matched',
+    });
+
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) return;
+    expect(result.value.searchMatches).toEqual([
+      {
+        index: 2,
+        fieldId: fixture.nameFieldId,
+        recordId: RecordId.create(fixture.insertedRecordIds[2]!)._unsafeUnwrap(),
+      },
+    ]);
+  });
+
+  it('projects complete filtered/sorted row numbers for search matches', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'search-view-index',
+      rows: [
+        { name: 'Alpha', age: 10 },
+        { name: 'Beta', age: 20 },
+        { name: 'Alpha two', age: 30 },
+      ],
+    });
+    const search = {
+      search: RecordSearch.fromTuple(['Alpha', fixture.nameFieldId.toString(), true]),
+      visibleFieldIds: [fixture.nameFieldId],
+    };
+    const pagination = OffsetPagination.create(
+      PageLimit.create(1)._unsafeUnwrap(),
+      PageOffset.create(1)._unsafeUnwrap()
+    );
+
+    const result = await fixture.repository.find(fixture.context, fixture.table, undefined, {
+      mode: 'stored',
+      includeTotal: false,
+      pagination,
+      search,
+      includeSearchFieldMatches: true,
+      searchIndexMode: 'view',
+    });
+
+    expect(result.isOk()).toBe(true);
+    if (result.isErr()) return;
+    expect(result.value.searchMatches).toEqual([
+      {
+        index: 3,
+        fieldId: fixture.nameFieldId,
+        recordId: RecordId.create(fixture.insertedRecordIds[2]!)._unsafeUnwrap(),
+      },
+    ]);
+    expect(driver.queries.some((query) => query.sql.includes('row_number() over ()'))).toBe(true);
   });
 
   it('streams correct pages for cursor pagination and respects projection', async () => {
@@ -629,5 +1142,413 @@ describe('PostgresTableRecordQueryRepository projection (pglite)', () => {
     expect(driver.queries[0].parameters).toEqual([2]);
     expect(driver.queries[0].sql).not.toContain(' offset ');
     expect(driver.queries[0].sql).not.toContain('"__auto_number" >');
+  });
+
+  it('aggregates totals through the existing Table Record repository', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'aggregate-total',
+      rows: [
+        { name: 'A', age: 10 },
+        { name: 'B', age: 20 },
+        { name: 'B', age: 20 },
+      ],
+    });
+    const viewId = fixture.table.defaultView()._unsafeUnwrap().id().toString();
+    const aggregation = fixture.table
+      .createRecordAggregation({
+        viewId,
+        fields: [
+          { fieldId: fixture.nameFieldId.toString(), statisticFunc: 'unique' },
+          { fieldId: fixture.ageFieldId.toString(), statisticFunc: 'count' },
+          { fieldId: fixture.ageFieldId.toString(), statisticFunc: 'sum' },
+          { fieldId: fixture.ageFieldId.toString(), statisticFunc: 'average' },
+        ],
+      })
+      ._unsafeUnwrap();
+
+    const result = await fixture.repository.aggregate(fixture.context, fixture.table, aggregation);
+
+    expect(result.isOk()).toBe(true);
+    expect(
+      result._unsafeUnwrap().map(({ fieldId, statisticFunc, value, groupValues }) => ({
+        fieldId: fieldId.toString(),
+        statisticFunc,
+        value,
+        groupValues,
+      }))
+    ).toEqual([
+      {
+        fieldId: fixture.nameFieldId.toString(),
+        statisticFunc: 'unique',
+        value: 2,
+        groupValues: undefined,
+      },
+      {
+        fieldId: fixture.ageFieldId.toString(),
+        statisticFunc: 'count',
+        value: 3,
+        groupValues: undefined,
+      },
+      {
+        fieldId: fixture.ageFieldId.toString(),
+        statisticFunc: 'sum',
+        value: 50,
+        groupValues: undefined,
+      },
+      {
+        fieldId: fixture.ageFieldId.toString(),
+        statisticFunc: 'average',
+        value: 50 / 3,
+        groupValues: undefined,
+      },
+    ]);
+    expect(driver.queries.at(-1)?.sql).toContain('with "record_aggregation_scope" as');
+  });
+
+  it('returns every requested group prefix and respects the record condition spec', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'aggregate-group',
+      rows: [
+        { name: 'A', age: 10 },
+        { name: 'A', age: 20 },
+        { name: 'B', age: 30 },
+      ],
+    });
+    const aggregation = fixture.table
+      .createRecordAggregation({
+        viewId: fixture.table.defaultView()._unsafeUnwrap().id().toString(),
+        fields: [{ fieldId: fixture.ageFieldId.toString(), statisticFunc: 'sum' }],
+        groupBy: [
+          { fieldId: fixture.nameFieldId.toString(), order: 'asc' },
+          { fieldId: fixture.ageFieldId.toString(), order: 'asc' },
+        ],
+      })
+      ._unsafeUnwrap();
+    const selectedIds = [
+      RecordId.create(fixture.insertedRecordIds[0]!)._unsafeUnwrap(),
+      RecordId.create(fixture.insertedRecordIds[1]!)._unsafeUnwrap(),
+    ];
+
+    const result = await fixture.repository.aggregate(
+      fixture.context,
+      fixture.table,
+      aggregation,
+      RecordByIdsSpec.create(selectedIds)
+    );
+
+    expect(result.isOk()).toBe(true);
+    expect(
+      result._unsafeUnwrap().map(({ statisticFunc, value, groupValues }) => ({
+        statisticFunc,
+        value,
+        groupValues,
+      }))
+    ).toEqual([
+      { statisticFunc: 'sum', value: 30, groupValues: undefined },
+      { statisticFunc: 'sum', value: 30, groupValues: ['A'] },
+      { statisticFunc: 'sum', value: 10, groupValues: ['A', 10] },
+      { statisticFunc: 'sum', value: 20, groupValues: ['A', 20] },
+    ]);
+  });
+
+  it('orders group rows and applies visible-row search before aggregation', async () => {
+    const fixture = await setupRepositoryFixture({
+      db,
+      createdSchemas,
+      seed: 'aggregate-search',
+      rows: [
+        { name: 'Alpha', age: 10 },
+        { name: 'Alpine', age: 20 },
+        { name: 'Beta', age: 30 },
+      ],
+    });
+    const aggregation = fixture.table
+      .createRecordAggregation({
+        viewId: fixture.table.defaultView()._unsafeUnwrap().id().toString(),
+        fields: [{ fieldId: fixture.ageFieldId.toString(), statisticFunc: 'count' }],
+        groupBy: [{ fieldId: fixture.nameFieldId.toString(), order: 'desc' }],
+      })
+      ._unsafeUnwrap();
+
+    const result = await fixture.repository.aggregate(
+      fixture.context,
+      fixture.table,
+      aggregation,
+      undefined,
+      {
+        search: {
+          search: RecordSearch.fromTuple(['Al', fixture.nameFieldId.toString(), true]),
+          visibleFieldIds: [fixture.nameFieldId],
+        },
+      }
+    );
+
+    expect(
+      result._unsafeUnwrap().map(({ value, groupValues }) => ({ value, groupValues }))
+    ).toEqual([
+      { value: 2, groupValues: undefined },
+      { value: 1, groupValues: ['Alpine'] },
+      { value: 1, groupValues: ['Alpha'] },
+    ]);
+    expect(driver.queries.at(-1)?.sql).toContain('order by "a"."col_name" desc');
+  });
+
+  it('aggregates flattened multiple values and attachment sizes without a legacy query adapter', async () => {
+    const seed = 'aggregate-json';
+    const baseId = BaseId.create(createId('bse', seed))._unsafeUnwrap();
+    const tableId = TableId.create(createId('tbl', seed))._unsafeUnwrap();
+    const nameFieldId = FieldId.create(createId('fld', `n-${seed}`))._unsafeUnwrap();
+    const tagsFieldId = FieldId.create(createId('fld', `t-${seed}`))._unsafeUnwrap();
+    const filesFieldId = FieldId.create(createId('fld', `f-${seed}`))._unsafeUnwrap();
+    const builder = Table.builder()
+      .withBaseId(baseId)
+      .withId(tableId)
+      .withName(TableName.create('JSON Aggregation')._unsafeUnwrap());
+    builder
+      .field()
+      .singleLineText()
+      .withId(nameFieldId)
+      .withName(FieldName.create('Name')._unsafeUnwrap())
+      .primary()
+      .done();
+    builder
+      .field()
+      .multipleSelect()
+      .withId(tagsFieldId)
+      .withName(FieldName.create('Tags')._unsafeUnwrap())
+      .done();
+    builder
+      .field()
+      .attachment()
+      .withId(filesFieldId)
+      .withName(FieldName.create('Files')._unsafeUnwrap())
+      .done();
+    builder.view().defaultGrid().done();
+    const table = builder.build()._unsafeUnwrap();
+    for (const [fieldId, dbFieldName] of [
+      [nameFieldId, 'col_name'],
+      [tagsFieldId, 'col_tags'],
+      [filesFieldId, 'col_files'],
+    ] as const) {
+      table
+        .getField((field) => field.id().equals(fieldId))
+        ._unsafeUnwrap()
+        .setDbFieldName(DbFieldName.rehydrate(dbFieldName)._unsafeUnwrap())
+        ._unsafeUnwrap();
+    }
+
+    const schemaName = baseId.toString();
+    const fullTableName = `${schemaName}.${tableId.toString()}`;
+    createdSchemas.push(schemaName);
+    await sql`CREATE SCHEMA ${sql.id(schemaName)}`.execute(db);
+    await sql`
+      CREATE TABLE ${sql.table(fullTableName)} (
+        __id text PRIMARY KEY,
+        __version integer NOT NULL,
+        __auto_number integer,
+        __created_time timestamptz,
+        __created_by text,
+        __last_modified_time timestamptz,
+        __last_modified_by text,
+        col_name text,
+        col_tags jsonb,
+        col_files jsonb
+      )
+    `.execute(db);
+    const rows = [
+      { name: 'A', tags: ['A', 'B'], files: [{ size: 10 }, { size: 20 }] },
+      { name: 'B', tags: ['B'], files: [{ size: 5 }] },
+      { name: 'C', tags: null, files: null },
+    ];
+    for (const [index, row] of rows.entries()) {
+      await sql`
+        INSERT INTO ${sql.table(fullTableName)} (
+          __id, __version, __auto_number, __created_time, __created_by,
+          __last_modified_time, __last_modified_by, col_name, col_tags, col_files
+        ) VALUES (
+          ${createId('rec', `${index}-${seed}`)}, 1, ${index + 1},
+          ${'2025-01-01T00:00:00.000Z'}, ${'usr_creator'},
+          ${'2025-01-02T00:00:00.000Z'}, ${'usr_modifier'},
+          ${row.name}, ${row.tags ? JSON.stringify(row.tags) : null}::jsonb,
+          ${row.files ? JSON.stringify(row.files) : null}::jsonb
+        )
+      `.execute(db);
+    }
+    const manager = new TableRecordQueryBuilderManager(
+      db,
+      {} as unknown as ITableRepository,
+      new Pg16TypeValidationStrategy()
+    );
+    const repository = new PostgresTableRecordQueryRepository(manager, db, createLogger());
+    const context = { actorId: ActorId.create('tester')._unsafeUnwrap() };
+    const aggregation = table
+      .createRecordAggregation({
+        viewId: table.defaultView()._unsafeUnwrap().id().toString(),
+        fields: [
+          { fieldId: tagsFieldId.toString(), statisticFunc: 'unique' },
+          { fieldId: tagsFieldId.toString(), statisticFunc: 'percentUnique' },
+          { fieldId: filesFieldId.toString(), statisticFunc: 'totalAttachmentSize' },
+        ],
+      })
+      ._unsafeUnwrap();
+
+    const result = await repository.aggregate(context, table, aggregation);
+
+    expect(
+      result._unsafeUnwrap().map(({ statisticFunc, value }) => ({ statisticFunc, value }))
+    ).toEqual([
+      { statisticFunc: 'unique', value: 2 },
+      { statisticFunc: 'percentUnique', value: 200 / 3 },
+      { statisticFunc: 'totalAttachmentSize', value: 35 },
+    ]);
+  });
+
+  it('collects inclusive calendar days with timezone, null-end fallback, search, and top-ten ids', async () => {
+    const seed = 'calendar-daily';
+    const baseId = BaseId.create(createId('bse', seed))._unsafeUnwrap();
+    const tableId = TableId.create(createId('tbl', seed))._unsafeUnwrap();
+    const nameFieldId = FieldId.create(createId('fld', `n-${seed}`))._unsafeUnwrap();
+    const startFieldId = FieldId.create(createId('fld', `s-${seed}`))._unsafeUnwrap();
+    const endFieldId = FieldId.create(createId('fld', `e-${seed}`))._unsafeUnwrap();
+    const formatting = DateTimeFormatting.create({
+      date: DateFormattingPreset.ISO,
+      time: TimeFormatting.Hour24,
+      timeZone: 'Asia/Singapore',
+    })._unsafeUnwrap();
+    const builder = Table.builder()
+      .withBaseId(baseId)
+      .withId(tableId)
+      .withName(TableName.create('Calendar Daily')._unsafeUnwrap());
+    builder
+      .field()
+      .singleLineText()
+      .withId(nameFieldId)
+      .withName(FieldName.create('Name')._unsafeUnwrap())
+      .primary()
+      .done();
+    builder
+      .field()
+      .date()
+      .withId(startFieldId)
+      .withName(FieldName.create('Start')._unsafeUnwrap())
+      .withFormatting(formatting)
+      .done();
+    builder
+      .field()
+      .date()
+      .withId(endFieldId)
+      .withName(FieldName.create('End')._unsafeUnwrap())
+      .withFormatting(formatting)
+      .done();
+    builder.view().calendar().defaultName().done();
+    const table = builder.build()._unsafeUnwrap();
+    for (const [fieldId, dbFieldName] of [
+      [nameFieldId, 'col_name'],
+      [startFieldId, 'col_start'],
+      [endFieldId, 'col_end'],
+    ] as const) {
+      table
+        .getField((field) => field.id().equals(fieldId))
+        ._unsafeUnwrap()
+        .setDbFieldName(DbFieldName.rehydrate(dbFieldName)._unsafeUnwrap())
+        ._unsafeUnwrap();
+    }
+
+    const schemaName = baseId.toString();
+    const fullTableName = `${schemaName}.${tableId.toString()}`;
+    createdSchemas.push(schemaName);
+    await sql`CREATE SCHEMA ${sql.id(schemaName)}`.execute(db);
+    await sql`
+      CREATE TABLE ${sql.table(fullTableName)} (
+        __id text PRIMARY KEY,
+        __version integer NOT NULL,
+        __auto_number integer,
+        __created_time timestamptz,
+        __created_by text,
+        __last_modified_time timestamptz,
+        __last_modified_by text,
+        col_name text,
+        col_start timestamptz,
+        col_end timestamptz
+      )
+    `.execute(db);
+    const rows = [
+      {
+        name: 'Alpha span',
+        start: '2024-12-31T16:30:00.000Z',
+        end: '2025-01-02T16:30:00.000Z',
+      },
+      { name: 'Alpha null', start: '2025-01-01T17:00:00.000Z', end: null },
+      { name: 'Beta excluded', start: '2025-01-01T18:00:00.000Z', end: null },
+      ...Array.from({ length: 9 }, (_, index) => ({
+        name: `Alpha ${index}`,
+        start: new Date(
+          Date.parse('2025-01-01T19:00:00.000Z') + index * 60 * 60 * 1000
+        ).toISOString(),
+        end: null,
+      })),
+    ];
+    for (const [index, row] of rows.entries()) {
+      await sql`
+        INSERT INTO ${sql.table(fullTableName)} (
+          __id, __version, __auto_number, __created_time, __created_by,
+          __last_modified_time, __last_modified_by, col_name, col_start, col_end
+        ) VALUES (
+          ${createId('rec', `${index}-${seed}`)}, 1, ${index + 1},
+          ${'2025-01-01T00:00:00.000Z'}, ${'usr_creator'},
+          ${'2025-01-02T00:00:00.000Z'}, ${'usr_modifier'},
+          ${row.name}, ${row.start}, ${row.end}
+        )
+      `.execute(db);
+    }
+    const manager = new TableRecordQueryBuilderManager(
+      db,
+      {} as unknown as ITableRepository,
+      new Pg16TypeValidationStrategy()
+    );
+    const repository = new PostgresTableRecordQueryRepository(manager, db, createLogger());
+    const context = { actorId: ActorId.create('tester')._unsafeUnwrap() };
+    const calendar = table
+      .createRecordCalendarDailyCollection({
+        viewId: table.defaultView()._unsafeUnwrap().id().toString(),
+        startFieldId: startFieldId.toString(),
+        endFieldId: endFieldId.toString(),
+      })
+      ._unsafeUnwrap();
+
+    const result = await repository.calendarDailyCollection(
+      context,
+      table,
+      calendar,
+      {
+        startDate: '2025-01-01T00:00:00+08:00',
+        endDate: '2025-01-03T00:00:00+08:00',
+      },
+      undefined,
+      {
+        search: {
+          search: RecordSearch.fromTuple(['Alpha', nameFieldId.toString(), true]),
+          visibleFieldIds: [nameFieldId],
+        },
+      }
+    );
+
+    expect(
+      result._unsafeUnwrap().map((entry) => ({
+        date: entry.date,
+        count: entry.count,
+        recordIds: entry.recordIds.length,
+      }))
+    ).toEqual([
+      { date: '2025-01-01', count: 1, recordIds: 1 },
+      { date: '2025-01-02', count: 11, recordIds: 10 },
+      { date: '2025-01-03', count: 1, recordIds: 1 },
+    ]);
+    expect(driver.queries.at(-1)?.sql).toContain('generate_series');
+    expect(driver.queries.at(-1)?.sql).not.toContain('knex');
   });
 });

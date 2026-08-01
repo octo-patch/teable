@@ -15,11 +15,11 @@ import type {
   CellValueType,
   ISort,
   IGroup,
+  IManualSortRo,
   TableDomain,
 } from '@teable/core';
 import {
   ViewType,
-  IManualSortRo,
   RecordOpBuilder,
   ViewOpBuilder,
   generateShareId,

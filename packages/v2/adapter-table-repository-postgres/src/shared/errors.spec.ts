@@ -1,8 +1,9 @@
-import type { Field, IExecutionContext } from '@teable/v2-core';
+import type { Field } from '@teable/v2-core';
 import { ok } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 import {
   createSchemaNotNullViolationError,
+  createSchemaUniqueViolationError,
   describeError,
   extractNotNullColumn,
   extractUniqueColumn,
@@ -203,6 +204,50 @@ describe('PostgreSQL error utilities', () => {
     });
   });
 
+  describe('createSchemaUniqueViolationError', () => {
+    const fields = [
+      stubField('fldAbc123', 'Email Address', 'fld_email'),
+      stubField('fldDef456', 'Other Field', 'fld_other'),
+    ];
+
+    it('returns a semantic unique-field message with field details and localization', () => {
+      const result = createSchemaUniqueViolationError(
+        { code: PG_UNIQUE_VIOLATION, constraint: 'test_table_fld_email_unique' },
+        'test_table',
+        fields
+      );
+
+      expect(result.tags).toContain('validation');
+      expect(result.code).toBe('validation.field.unique_existing_values');
+      expect(result.message).toBe(
+        'Cannot mark field "Email Address" as unique because existing records contain duplicate values.'
+      );
+      expect(result.details).toEqual({
+        fieldId: 'fldAbc123',
+        fieldName: 'Email Address',
+      });
+      expect(result.localization).toEqual({
+        i18nKey: 'httpErrors.custom.fieldUniqueExistingValues',
+        context: { fieldName: 'Email Address' },
+      });
+    });
+
+    it('falls back to a generic message without localization when the field cannot be resolved', () => {
+      const result = createSchemaUniqueViolationError(
+        { code: PG_UNIQUE_VIOLATION, constraint: 'unrelated_constraint' },
+        'test_table',
+        fields
+      );
+
+      expect(result.code).toBe('validation.field.unique_existing_values');
+      expect(result.message).toBe(
+        'Cannot mark this field as unique because existing records contain duplicate values.'
+      );
+      expect(result.details).toBeUndefined();
+      expect(result.localization).toBeUndefined();
+    });
+  });
+
   describe('createSchemaNotNullViolationError', () => {
     const fields = [
       stubField('fldDef456', 'Required Field', 'fld_required'),
@@ -216,7 +261,7 @@ describe('PostgreSQL error utilities', () => {
       );
 
       expect(result.tags).toContain('validation');
-      expect(result.code).toBe('validation.field.not_null');
+      expect(result.code).toBe('validation.field.required_existing_values');
       expect(result.message).toBe(
         'Cannot mark field "Required Field" as required because existing records contain empty values.'
       );
@@ -224,18 +269,10 @@ describe('PostgreSQL error utilities', () => {
         fieldId: 'fldDef456',
         fieldName: 'Required Field',
       });
-    });
-
-    it('uses the execution-context translator when field name is known', () => {
-      const t: NonNullable<IExecutionContext['$t']> = (key, options) =>
-        `${key}:${String(options?.fieldName)}`;
-      const result = createSchemaNotNullViolationError(
-        { code: PG_NOT_NULL_VIOLATION, column: 'fld_required' },
-        fields,
-        t
-      );
-
-      expect(result.message).toBe('validation.field.requiredExistingValues:Required Field');
+      expect(result.localization).toEqual({
+        i18nKey: 'httpErrors.custom.fieldRequiredExistingValues',
+        context: { fieldName: 'Required Field' },
+      });
     });
 
     it('falls back to a generic semantic message when the column cannot be resolved', () => {
@@ -244,11 +281,12 @@ describe('PostgreSQL error utilities', () => {
         fields
       );
 
-      expect(result.code).toBe('validation.field.not_null');
+      expect(result.code).toBe('validation.field.required_existing_values');
       expect(result.message).toBe(
         'Cannot mark this field as required because existing records contain empty values.'
       );
       expect(result.details).toBeUndefined();
+      expect(result.localization).toBeUndefined();
     });
   });
 
@@ -264,6 +302,7 @@ describe('PostgreSQL error utilities', () => {
         expect(result.tags).toContain('validation');
         expect(result.code).toBe('validation.field.not_null');
         expect(result.message).toBe('Cannot complete insert: field  cannot be empty');
+        expect(result.localization).toBeUndefined();
       });
 
       it('wraps unique violation as validation error', () => {
@@ -282,6 +321,7 @@ describe('PostgreSQL error utilities', () => {
         expect(result.tags).toContain('validation');
         expect(result.code).toBe('validation.link.one_one_duplicate');
         expect(result.message).toContain('one-to-one relationship');
+        expect(result.localization).toEqual({ i18nKey: 'httpErrors.custom.linkOneOneDuplicate' });
       });
 
       it('wraps unknown error as infrastructure error', () => {
@@ -367,6 +407,10 @@ describe('PostgreSQL error utilities', () => {
           'Cannot complete insert: field fldAbc123 must have a unique value'
         );
         expect(result.details).toEqual({ fieldId: 'fldAbc123', fieldName: 'Email Address' });
+        expect(result.localization).toEqual({
+          i18nKey: 'httpErrors.custom.recordFieldValueDuplicate',
+          context: { fieldName: 'Email Address' },
+        });
       });
 
       it('includes fieldId in message and fieldName in details for not-null violation', () => {
@@ -383,6 +427,10 @@ describe('PostgreSQL error utilities', () => {
         expect(result.code).toBe('validation.field.not_null');
         expect(result.message).toBe('Cannot complete insert: field fldDef456 cannot be empty');
         expect(result.details).toEqual({ fieldId: 'fldDef456', fieldName: 'Required Field' });
+        expect(result.localization).toEqual({
+          i18nKey: 'httpErrors.custom.recordFieldValueNotNull',
+          context: { fieldName: 'Required Field' },
+        });
       });
 
       it('falls back to generic unique message when column not in fields', () => {

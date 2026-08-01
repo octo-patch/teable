@@ -1567,7 +1567,8 @@ describe('Table.createRecord with default values', () => {
 
     expect(record.fields().get(textFieldId._unsafeUnwrap())?.toValue()).toBe('Default Text');
     expect(record.fields().get(numberFieldId._unsafeUnwrap())?.toValue()).toBe(50);
-    expect(record.fields().get(checkboxFieldId._unsafeUnwrap())?.toValue()).toBe(false);
+    // v1 contract: checkbox false normalizes to null in storage
+    expect(record.fields().get(checkboxFieldId._unsafeUnwrap())?.toValue()).toBeNull();
   });
 
   it('mixes explicit values with default values', () => {

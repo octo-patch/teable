@@ -386,6 +386,8 @@
       "tableTrashRead": "Lea la basura de la mesa",
       "tableTrashUpdate": "Actualizar la basura de la tabla",
       "tableTrashReset": "Restablecer la basura de la mesa",
+      "tableArchiveRead": "Leer el archivo de la tabla",
+      "tableArchiveManage": "Gestionar el archivo de la tabla",
       "viewCreate": "Crear vista",
       "viewDelete": "Eliminar vista",
       "viewRead": "Leer vista",
@@ -401,6 +403,7 @@
       "recordRead": "Récord de lectura",
       "recordUpdate": "Registro de actualización",
       "recordCopy": "Copy record",
+      "recordArchive": "Archivar registro",
       "automationCreate": "Crear automatización",
       "automationDelete": "Eliminar la automatización",
       "automationRead": "Leer automatización",
@@ -926,15 +929,18 @@
       "nameMaxLength": "El nombre es demasiado largo. El máximo es {{max}} caracteres.",
       "descriptionMaxLength": "La descripción es demasiado larga. El máximo es {{max}} caracteres."
     },
-    "validation": {
-      "field": {
-        "unique": "El campo debe tener un valor único"
-      }
-    },
     "custom": {
       "fieldValueNotNull": "\"{{tableName}}\" campo \"{{fieldName}}\" no permite valores vacíos, por favor complete antes de enviar.",
       "fieldValueDuplicate": "\"{{tableName}}\" campo \"{{fieldName}}\" no permite valores duplicados, por favor complete un valor único antes de enviar.",
+      "recordFieldValueNotNull": "El campo \"{{fieldName}}\" no permite valores vacíos, por favor complete antes de enviar.",
+      "recordFieldValueDuplicate": "El campo \"{{fieldName}}\" no permite valores duplicados, por favor complete un valor único antes de enviar.",
       "linkFieldValueDuplicate": "\"{{fieldName}}\" campo no permite asociaciones duplicadas con el mismo registro",
+      "linkBatchDuplicate": "No se puede vincular el registro: en el mismo lote ya está vinculado por otro registro. En las relaciones de uno a muchos, cada registro secundario solo puede pertenecer a un registro principal.",
+      "linkOneManyDuplicate": "No se puede vincular el registro: ya está vinculado a otro registro. En las relaciones de uno a muchos, cada registro secundario solo puede pertenecer a un registro principal.",
+      "linkOneOneDuplicate": "No se puede vincular el registro: el registro de destino ya está vinculado por otro registro en una relación de uno a uno.",
+      "fieldMaxColumnLimit": "La tabla \"{{tableName}}\" puede tener como máximo {{maxFieldCount}} campos.",
+      "fieldRequiredExistingValues": "No se puede marcar el campo \"{{fieldName}}\" como obligatorio porque hay registros existentes con valores vacíos.",
+      "fieldUniqueExistingValues": "No se puede marcar el campo \"{{fieldName}}\" como único porque hay registros existentes con valores duplicados.",
       "requestTimeout": "El ámbito de la operación actual es demasiado grande, por favor intente con un ámbito más pequeño.",
       "searchTimeOut": "La búsqueda ha expirado, por favor reduce el ámbito de búsqueda y vuelve a intentarlo.",
       "dependencyNodeRequire": "Nodo de dependencia no probado, por favor verifica si todos los nodos anteriores han sido probados",

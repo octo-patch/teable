@@ -12,6 +12,7 @@ import type { ITableSpecVisitor } from './ITableSpecVisitor';
 
 export type TableViewQueryDefaultsUpdate = {
   viewId: ViewId;
+  previousQueryDefaults?: ViewQueryDefaults;
   queryDefaults: ViewQueryDefaults;
 };
 

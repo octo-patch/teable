@@ -338,10 +338,12 @@ export class SameTableBatchQueryBuilder {
             columnName: string;
             errorColumnName?: string;
           }> = [];
+          let materialized = false;
 
           // Build select expressions for each field in this level
           for (const field of fields) {
             const columnName = yield* this.getColumnName(field);
+            materialized ||= this.isJsonBackedField(field);
             const expr = yield* this.buildFieldExpression(table, field, previousCteColumns);
 
             computedFragments.push(
@@ -366,6 +368,7 @@ export class SameTableBatchQueryBuilder {
               level,
               fragments: [...carryForwardFragments, ...computedFragments],
               previousCteName: ctes.length > 0 ? ctes[ctes.length - 1].name : undefined,
+              materialized,
             })
           );
 
@@ -634,6 +637,15 @@ export class SameTableBatchQueryBuilder {
     if (isArray) return 'array';
     if (innerFieldType && this.isJsonStorageFieldType(innerFieldType)) return 'json';
     return 'scalar';
+  }
+
+  private isJsonBackedField(field: Field): boolean {
+    const dbFieldType = field
+      .dbFieldType()
+      .andThen((type) => type.value())
+      .map((type) => type.trim().toUpperCase())
+      .unwrapOr('');
+    return dbFieldType === 'JSON' || dbFieldType === 'JSONB';
   }
 
   private isJsonStorageFieldType(fieldType: FieldType): boolean {

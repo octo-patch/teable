@@ -11,6 +11,7 @@ import { TABLE_IMPORT_CSV_QUEUE } from '../import/open-api/import-csv.processor'
 import { InvitationModule } from '../invitation/invitation.module';
 import { SettingOpenApiModule } from '../setting/open-api/setting-open-api.module';
 import { SettingModule } from '../setting/setting.module';
+import { LastVisitModule } from '../user/last-visit/last-visit.module';
 import { DataDbBaselineService } from './data-db-baseline.service';
 import { DataDbBindingService } from './data-db-binding.service';
 import { DataDbPreflightService } from './data-db-preflight.service';
@@ -45,6 +46,7 @@ import { TemplateSpaceInitService } from './template-space-init/template-space.i
     SpaceDataDbMigrationGuardModule,
   ],
   imports: [
+    LastVisitModule,
     StorageModule,
     SettingModule,
     SettingOpenApiModule,

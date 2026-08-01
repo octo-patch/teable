@@ -8,7 +8,10 @@ import {
   ActorId,
   CreateTableCommand,
   MemoryCommandBus,
+  MemoryEventBus,
   MemoryUndoRedoStore,
+  RECORD_REMOVAL_REASON,
+  RecordsDeleted,
   RedoCommand,
   Table as TableAggregate,
   UndoCommand,
@@ -67,6 +70,74 @@ const unwrap = <T, E extends { message: string }>(result: Result<T, E>, label: s
   return result.value;
 };
 
+// The pure v2 container has no trash sink — the nestjs backend registers the
+// RecordsDeleted → record_trash projection. The undo/redo replay of RestoreRecords
+// consults record_trash (purge guard: rows the user purged must not resurrect), so
+// the harness mimics the projection at the same seam: every published RecordsDeleted
+// event writes one minimal row per deleted record. Archived removals persist their
+// own write-ahead snapshots outside this container and are skipped, matching the
+// backend projection.
+//
+// Row ids must be random, never a module-level counter: the database can outlive one
+// test file (a shared testcontainers instance, or a pglite:// DIRECTORY path) while
+// module state resets per file — sequential ids would collide on record_trash_pkey.
+const trashSinkRowId = () => `rtrtest_${crypto.randomUUID()}`;
+
+class TrashSinkEventBus extends MemoryEventBus {
+  constructor(
+    handlerResolver: ConstructorParameters<typeof MemoryEventBus>[0],
+    private readonly db: () => Kysely<DynamicDb>
+  ) {
+    super(handlerResolver);
+  }
+
+  override async publish(
+    context: IExecutionContext,
+    event: Parameters<MemoryEventBus['publish']>[1]
+  ) {
+    const result = await super.publish(context, event);
+    if (result.isOk()) {
+      await this.sinkDeleted(context, [event]);
+    }
+    return result;
+  }
+
+  override async publishMany(
+    context: IExecutionContext,
+    events: Parameters<MemoryEventBus['publishMany']>[1]
+  ) {
+    const result = await super.publishMany(context, events);
+    if (result.isOk()) {
+      await this.sinkDeleted(context, events);
+    }
+    return result;
+  }
+
+  private async sinkDeleted(
+    context: IExecutionContext,
+    events: Parameters<MemoryEventBus['publishMany']>[1]
+  ) {
+    for (const event of events) {
+      if (!(event instanceof RecordsDeleted)) continue;
+      if (event.removalReason === RECORD_REMOVAL_REASON.Archived) continue;
+      if (event.recordIds.length === 0) continue;
+      await this.db()
+        .insertInto('record_trash')
+        .values(
+          event.recordIds.map((recordId) => ({
+            id: trashSinkRowId(),
+            table_id: event.tableId.toString(),
+            record_id: recordId.toString(),
+            snapshot: '{}',
+            created_by: context.actorId.toString(),
+            reason: RECORD_REMOVAL_REASON.Deleted,
+          }))
+        )
+        .execute();
+    }
+  }
+}
+
 export type UndoRedoDbHarness = Awaited<ReturnType<typeof createUndoRedoDbHarness>>;
 
 export const createUndoRedoDbHarness = async (options?: {
@@ -76,6 +147,17 @@ export const createUndoRedoDbHarness = async (options?: {
     tableDataSafetyLimits: options?.tableDataSafetyLimits,
   });
   const probe = new CommandProbeMiddleware();
+
+  const trashSinkEventBus = new TrashSinkEventBus(testContainer.container, () =>
+    testContainer.container.resolve<Kysely<DynamicDb>>(v2DataDbTokens.db)
+  );
+  testContainer.container.registerInstance(v2CoreTokens.eventBus, trashSinkEventBus);
+  testContainer.eventBus = trashSinkEventBus;
+  // This harness mirrors the full app: the sink above writes record_trash rows
+  // on delete, so the delete-undo purge guard is sound here and stays on.
+  testContainer.container.registerInstance(v2CoreTokens.undoRedoReplayConfig, {
+    restorePurgeGuard: true,
+  });
 
   testContainer.container.registerInstance(
     v2CoreTokens.commandBus,

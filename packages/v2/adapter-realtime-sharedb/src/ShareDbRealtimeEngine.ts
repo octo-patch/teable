@@ -143,6 +143,26 @@ export class ShareDbRealtimeEngine implements IRealtimeEngine {
     return this.publisher.publish(channels, op);
   }
 
+  async invalidateCollection(
+    context: IExecutionContext,
+    collection: string,
+    change: RealtimeChange
+  ): Promise<Result<void, DomainError>> {
+    const op: ShareDbOp = {
+      create: undefined,
+      del: undefined,
+      op: this.toJson0Op(change),
+      src: this.toProjectionSource(context.requestId),
+      seq: 1,
+      v: 0,
+      m: {
+        ts: Date.now(),
+      },
+      c: collection,
+    };
+    return this.publisher.publish([collection], op);
+  }
+
   private toProjectionSource(requestId: string | undefined): string {
     return `${v2ProjectionOpSourcePrefix}${requestId ?? 'unknown'}`;
   }

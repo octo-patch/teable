@@ -58,9 +58,6 @@
     "refresh": "Actualizar",
     "login": "Iniciar sesión",
     "useTemplate": "Usar plantilla",
-    "copyToMySpace": "Copy to my space",
-    "saveToMySpace": "Save to my space",
-    "supportSaveCopy": "Support saving a copy",
     "backToSpace": "Volver al Espacio",
     "switchBase": "Cambiar Base",
     "continue": "Continuar",
@@ -545,6 +542,20 @@
     "viewPricing": "Ver precios",
     "billable": "Facturable",
     "billableByAuthorityMatrix": "Facturación generada por la matriz de permisos",
+    "seatConfirm": {
+      "title": "Esta invitación aumentará el costo de tu suscripción",
+      "roleChangeTitle": "Este cambio de rol aumentará el costo de tu suscripción",
+      "matrixTitle": "Añadir miembros aumentará el costo de tu suscripción",
+      "inviteDesc_one": "El miembro que estás invitando se unirá con el rol {{role}} y ocupará 1 asiento de la suscripción; el costo aumentará en consecuencia. Si solo necesita ver o comentar, simplemente elige el rol gratuito Espectador o Comentador.",
+      "inviteDesc_other": "Los {{count}} miembros que estás invitando se unirán con el rol {{role}} y ocuparán {{count}} asientos de la suscripción; el costo aumentará en consecuencia. Si solo necesitan ver o comentar, simplemente elige el rol gratuito Espectador o Comentador.",
+      "linkDesc": "Los miembros que se unan mediante este enlace recibirán el rol {{role}} y cada uno ocupará 1 asiento de la suscripción; el costo crecerá a medida que se unan. Si solo necesitan ver o comentar, simplemente elige el rol gratuito Espectador o Comentador.",
+      "roleChangeDesc": "Tras cambiar a {{role}}, este miembro ocupará 1 asiento de la suscripción y el costo aumentará en consecuencia.",
+      "matrixDesc": "Este miembro tiene actualmente un rol gratuito (Espectador/Comentador). Al añadirlo a la matriz de permisos ocupará 1 asiento de la suscripción y el costo aumentará en consecuencia.",
+      "seatLimitTitle": "Asientos de licencia insuficientes",
+      "seatLimitDesc": "Esta instancia está usando {{seats}} de {{seatLimit}} asientos con licencia y no quedan suficientes para esta acción. Contacta con tu administrador para comprar más asientos. Si solo necesita ver o comentar, puedes usar el rol gratuito Espectador o Comentador.",
+      "seatLimitConfirm": "Entendido",
+      "confirmInvite": "Confirmar e invitar"
+    },
     "licenseExpiredGracePeriod": "Su licencia autohospedada ha caducado y se degradará al plan gratuito el {{expiredTime}}. Actualice su licencia de inmediato para mantener el acceso a las funciones premium.",
     "licenseAutoFetchFailed": "Error en la renovación automática de la licencia. Quedan {{days}} día(s) del período de gracia antes de la degradación.",
     "licenseAutoFetchRetryFailed": "La renovación automática sigue fallando. Comprueba la conexión con el servidor de Teable o actualiza la licencia manualmente.",
@@ -1294,10 +1305,10 @@
     }
   },
   "changelog": {
-    "newUpdate": "ACTUALIZACIÓN DEL 28 DE JULIO",
-    "title": "Teable Skill para agentes de IA",
-    "url": "https://help.teable.ai/en/changelog#jul-28-2026",
-    "id": "changelog-2026-07-28-teable-skill-for-ai-agents"
+    "newUpdate": "ACTUALIZACIÓN DEL 31 DE JULIO",
+    "title": "Bajada de precios de GPT 5.6 en Teable",
+    "url": "https://help.teable.ai/en/changelog#jul-31-2026",
+    "id": "changelog-2026-07-31-gpt-5-6-price-cuts-in-teable"
   },
   "resourceDescription": {
     "addDescription": "Agregar descripción",

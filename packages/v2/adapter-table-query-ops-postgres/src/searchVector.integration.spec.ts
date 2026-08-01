@@ -126,6 +126,7 @@ describeWithPostgres('PostgresTableSearchVectorAdvisor', () => {
             "coveredFieldDbNames": [
               "fld_title",
               "fld_notes",
+              "fld_count",
             ],
             "indexKind": "gin_trgm",
             "languageConfig": "simple",
@@ -134,9 +135,7 @@ describeWithPostgres('PostgresTableSearchVectorAdvisor', () => {
             "planStatus": "validated",
             "provider": "pg_trgm",
             "semantics": "substring",
-            "skippedReasons": [
-              "non_text_value",
-            ],
+            "skippedReasons": [],
           }
         `);
       expect([
@@ -202,6 +201,7 @@ describeWithPostgres('PostgresTableSearchVectorAdvisor', () => {
             fieldId: field.fieldId,
             fieldDbName: field.fieldDbName ?? '',
             fieldType: field.fieldType,
+            ...(field.textProjection ? { textProjection: field.textProjection } : {}),
           })),
           allowLargeTableRewrite: true,
         },
@@ -452,6 +452,7 @@ describeWithPostgres('PostgresTableSearchVectorAdvisor', () => {
               fieldId: field.fieldId,
               fieldDbName: field.fieldDbName ?? '',
               fieldType: field.fieldType,
+              ...(field.textProjection ? { textProjection: field.textProjection } : {}),
             })),
           },
         })

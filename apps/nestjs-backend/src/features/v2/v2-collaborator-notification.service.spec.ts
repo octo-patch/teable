@@ -15,6 +15,7 @@ vi.mock('./v2-container.service', () => ({
 
 import {
   V2CollaboratorNotificationDispatcher,
+  V2RecordsBatchUpdatedCollaboratorNotificationProjection,
   V2RecordCreatedCollaboratorNotificationProjection,
   V2RecordUpdatedCollaboratorNotificationProjection,
 } from './v2-collaborator-notification.service';
@@ -198,6 +199,108 @@ describe('V2CollaboratorNotificationDispatcher', () => {
 
     expect(result._unsafeUnwrap()).toBeUndefined();
     expect(scheduled).toHaveLength(0);
+    expect(notificationService.sendCollaboratorNotify).not.toHaveBeenCalled();
+  });
+});
+
+describe('V2RecordsBatchUpdatedCollaboratorNotificationProjection', () => {
+  it('does not schedule or query for an all-clear batch', async () => {
+    const { db, dispatcher, notificationService } = createDispatcher();
+    const projection = new V2RecordsBatchUpdatedCollaboratorNotificationProjection(dispatcher);
+    const { context, scheduled } = createScheduledContext();
+
+    const result = await projection.handle(
+      context as never,
+      {
+        source: 'user',
+        tableId: { toString: () => 'tblNotify00000001' },
+        updates: [
+          {
+            recordId: 'recNotify00000001',
+            changes: [
+              {
+                fieldId: 'fldAssignee0000001',
+                oldValue: { id: 'usrTarget00000001', title: 'Target' },
+                newValue: null,
+              },
+            ],
+          },
+        ],
+      } as never
+    );
+
+    expect(result._unsafeUnwrap()).toBeUndefined();
+    expect(scheduled).toHaveLength(0);
+    expect(db.selectFrom).not.toHaveBeenCalled();
+    expect(notificationService.sendCollaboratorNotify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['single object', { id: 'usrTarget00000001', title: 'Target' }],
+    ['array', [{ id: 'usrTarget00000001', title: 'Target' }]],
+  ])('schedules once for a valid %s user candidate', async (_label, newValue) => {
+    const { db, dispatcher, notificationService } = createDispatcher();
+    const projection = new V2RecordsBatchUpdatedCollaboratorNotificationProjection(dispatcher);
+    const { context, scheduled } = createScheduledContext();
+
+    const result = await projection.handle(
+      context as never,
+      {
+        source: 'user',
+        tableId: { toString: () => 'tblNotify00000001' },
+        updates: [
+          {
+            recordId: 'recNotify00000001',
+            changes: [
+              {
+                fieldId: 'fldAssignee0000001',
+                oldValue: null,
+                newValue,
+              },
+            ],
+          },
+        ],
+      } as never
+    );
+
+    expect(result._unsafeUnwrap()).toBeUndefined();
+    expect(scheduled).toHaveLength(1);
+    expect(db.selectFrom).not.toHaveBeenCalled();
+
+    await flushScheduled(scheduled);
+
+    expect(db.selectFrom).toHaveBeenCalledTimes(1);
+    expect(notificationService.sendCollaboratorNotify).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not schedule computed batches even when they contain a user candidate', async () => {
+    const { db, dispatcher, notificationService } = createDispatcher();
+    const projection = new V2RecordsBatchUpdatedCollaboratorNotificationProjection(dispatcher);
+    const { context, scheduled } = createScheduledContext();
+
+    const result = await projection.handle(
+      context as never,
+      {
+        source: 'computed',
+        tableId: { toString: () => 'tblNotify00000001' },
+        updates: [
+          {
+            recordId: 'recNotify00000001',
+            changes: [
+              {
+                fieldId: 'fldAssignee0000001',
+                oldValue: null,
+                newValue: { id: 'usrTarget00000001', title: 'Target' },
+              },
+            ],
+          },
+        ],
+      } as never
+    );
+
+    expect(result._unsafeUnwrap()).toBeUndefined();
+    expect(scheduled).toHaveLength(0);
+    expect(db.selectFrom).not.toHaveBeenCalled();
     expect(notificationService.sendCollaboratorNotify).not.toHaveBeenCalled();
   });
 });

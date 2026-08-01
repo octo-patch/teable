@@ -98,17 +98,6 @@
     "help": "访问 <HelpCenter /> 获取更多信息",
     "helpCenter": "帮助中心"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "无法建立关联：同一批次中已有其他记录关联了该记录。在一对多关系中，每条子记录只能属于一个父记录。",
-      "one_many_duplicate": "无法建立关联：该记录已关联到其他记录。在一对多关系中，每条子记录只能属于一个父记录。",
-      "one_one_duplicate": "无法建立关联：目标记录已在一对一关系中被其他记录关联。"
-    },
-    "field": {
-      "maxColumnLimit": "表“{{tableName}}”最多只能有 {{maxFieldCount}} 个字段。",
-      "requiredExistingValues": "字段“{{fieldName}}”中已有记录为空，无法设置为必填。"
-    }
-  },
   "field": {
     "advancedProps": "高级属性",
     "hide": "隐藏",
@@ -513,6 +502,11 @@
       "clearFailed": "清除失败",
       "clearConfirmTitle": "清除数据",
       "clearConfirmDescription": "此操作将清除 {{cellCount}} 个单元格，{{rowCount}} 条记录。确定要继续吗？",
+      "archiveRecordConfirmTitle": "归档记录",
+      "archiveRecordConfirmDescription": "此操作将归档 {{recordCount}} 条记录。归档后可在表格归档区查看和恢复。",
+      "archiveRecord": "归档",
+      "archiving": "正在归档...",
+      "archiveSuccessful": "归档成功",
       "deleteRecordConfirmTitle": "删除记录",
       "deleteRecordConfirmDescription": "此操作将删除 {{recordCount}} 条记录。确定要继续吗？",
       "duplicateRecordsConfirmTitle": "复制记录",
@@ -1074,6 +1068,8 @@
     "insertRecordBelow": "在下方插入 <input /> 记录",
     "deleteRecord": "删除记录",
     "deleteAllSelectedRecords": "删除所有选定的记录",
+    "archiveRecord": "归档记录",
+    "archiveAllSelectedRecords": "归档所有选定的记录",
     "duplicateRecords": "复制所选记录",
     "editField": "编辑字段",
     "duplicateField": "复制字段",
@@ -1144,11 +1140,49 @@
     "title": "确认新增记录？",
     "description": "将会新增 {{count}} 条记录"
   },
+  "tableArchive": {
+    "title": "表格归档区",
+    "menuTitle": "归档区",
+    "archivedTime": "归档时间",
+    "archivedBy": "归档人",
+    "recordDetail": "记录详情",
+    "empty": "暂无归档记录",
+    "allCreators": "全部创建人",
+    "filterArchivedTime": "归档时间",
+    "searchPlaceholder": "搜索归档记录",
+    "clearFilter": "清除筛选",
+    "export": "导出 CSV",
+    "exporting": "导出中… {{count}} 行",
+    "exportSucceed": "导出完成，开始下载",
+    "restoreSelected": "恢复（{{count}}）",
+    "permanentDeleteSelected": "永久删除（{{count}}）",
+    "permanentDeleteConfirm": "永久删除 {{count}} 条归档记录？此操作不可撤销。",
+    "permanentDeleteSucceed": "已永久删除",
+    "resetArchive": "清空归档区",
+    "resetArchiveConfirm": "清空该表格的全部归档记录？此操作不可撤销。",
+    "resetSucceed": "归档区已清空",
+    "orderBy": {
+      "archivedTime": "按归档时间排序",
+      "recordCreatedTime": "按创建时间排序",
+      "recordLastModifiedTime": "按最后修改时间排序"
+    }
+  },
   "tableTrash": {
     "title": "回收站",
     "resourceType": "类型",
     "deletedResource": "资源",
-    "moreResources": "还有 {{count}} 条"
+    "moreResources": "还有 {{count}} 条",
+    "deletedTime": "删除时间",
+    "deletedBy": "删除人",
+    "filterAllTypes": "全部类型",
+    "filterAllUsers": "全部操作人",
+    "filterDeletedTime": "删除时间",
+    "clearFilter": "清除筛选",
+    "recordsDialogTitle": "已删除的记录（{{count}}）",
+    "recordDetail": "记录详情",
+    "filterAllCreators": "全部创建人",
+    "filterCreatedTime": "创建时间",
+    "searchPlaceholder": "搜索记录"
   },
   "pluginPanel": {
     "empty": {
@@ -1202,7 +1236,10 @@
     "linkScopeDialogTitle": "配置关联字段范围",
     "linkHolderCanCopyAndSave": "可另存为副本",
     "linkHolderCanCopyAndSaveDesc": "获得链接的人可以将数据保存到自己的空间",
-    "editRequiresLogin": "用户必须登录才能编辑记录",
+    "copyToMySpace": "复制到我的空间",
+    "saveToMySpace": "保存到我的空间",
+    "supportSaveCopy": "可保存副本到我的空间",
+    "editRequiresLogin": "登录后即可编辑记录",
     "enterPassword": "输入密码",
     "allowCopyData": "允许查看者复制数据",
     "sharedNode": "已分享节点",

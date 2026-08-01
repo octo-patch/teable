@@ -28,3 +28,7 @@ Declaration: If the folder I belong to changes, please update me, especially cor
 - `TableQueryService.ts` - Role: application service; Purpose: common table lookup operations
   (getById, getByIdInBase, exists) used across CommandHandlers and QueryHandlers.
 - `TableUpdateFlow.ts` - Role: application service; Purpose: shared table update workflow (mutate + persist + publish).
+- `ViewPluginCreationService.ts` - Role: application service; Purpose: resolve external Plugin
+  definitions and prepare/install Plugin View integrations around aggregate creation.
+- `ViewManualSortService.ts` - Role: application service; Purpose: execute aggregate-declared
+  row-order schema preparation and stream stable row-order updates through record repositories.

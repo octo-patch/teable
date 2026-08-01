@@ -83,7 +83,9 @@ export const TableInfo: React.FC<ITableInfoProps> = (props: ITableInfoProps) => 
       {connected && !isImporting ? (
         <EmojiPicker
           className="flex size-5 cursor-pointer items-center justify-center hover:bg-muted-foreground/60"
+          icon={table?.icon}
           onChange={(icon: string) => table?.updateIcon(icon)}
+          onRemove={() => table?.updateIcon(null)}
           disabled={!canUpdateTable}
         >
           {icon}
@@ -93,7 +95,7 @@ export const TableInfo: React.FC<ITableInfoProps> = (props: ITableInfoProps) => 
       )}
       <div
         className={cn(
-          'relative flex h-8 max-w-[120px] shrink-0 grow-0 flex-col items-start justify-center gap-1 @xl/view-header:max-w-[144px]',
+          'relative flex h-9 max-w-[120px] shrink-0 grow-0 flex-col items-start justify-center gap-0 @xl/view-header:max-w-[144px]',
           isEditing ? 'min-w-[120px]' : 'min-w-20'
         )}
       >

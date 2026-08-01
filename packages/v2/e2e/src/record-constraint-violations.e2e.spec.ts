@@ -128,6 +128,10 @@ describe('v2 constraint violation errors (P0)', () => {
         expect(parsed.data.error.code).toBe('validation.field.not_null');
         expect(parsed.data.error.tags).toContain('validation');
         expect(parsed.data.error.message).toMatch(/cannot be empty|not-null/);
+        expect(parsed.data.error.localization).toEqual({
+          i18nKey: 'httpErrors.custom.recordFieldValueNotNull',
+          context: { fieldName: 'Required' },
+        });
       }
     });
 

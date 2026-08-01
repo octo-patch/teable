@@ -83,17 +83,22 @@ import { Table as TableAggregate } from '../../../domain/table/Table';
 import type { ITableBuildProps } from '../../../domain/table/TableBuilder';
 import { TableId } from '../../../domain/table/TableId';
 import { TableName } from '../../../domain/table/TableName';
-import { CalendarView } from '../../../domain/table/views/types/CalendarView';
-import { FormView } from '../../../domain/table/views/types/FormView';
-import { GalleryView } from '../../../domain/table/views/types/GalleryView';
-import { GridView } from '../../../domain/table/views/types/GridView';
-import { KanbanView } from '../../../domain/table/views/types/KanbanView';
-import { PluginView } from '../../../domain/table/views/types/PluginView';
+import type { CalendarView } from '../../../domain/table/views/types/CalendarView';
+import type { FormView } from '../../../domain/table/views/types/FormView';
+import type { GalleryView } from '../../../domain/table/views/types/GalleryView';
+import type { GridView } from '../../../domain/table/views/types/GridView';
+import type { KanbanView } from '../../../domain/table/views/types/KanbanView';
+import type { PluginView } from '../../../domain/table/views/types/PluginView';
 import type { View } from '../../../domain/table/views/View';
+import { ViewAuditMetadata } from '../../../domain/table/views/ViewAuditMetadata';
 import { ViewColumnMeta } from '../../../domain/table/views/ViewColumnMeta';
+import { createView } from '../../../domain/table/views/ViewFactory';
 import { ViewId } from '../../../domain/table/views/ViewId';
 import { ViewName } from '../../../domain/table/views/ViewName';
+import { ViewOrder } from '../../../domain/table/views/ViewOrder';
+import { ViewProperties } from '../../../domain/table/views/ViewProperties';
 import { ViewQueryDefaults } from '../../../domain/table/views/ViewQueryDefaults';
+import { ViewVersion } from '../../../domain/table/views/ViewVersion';
 import type { IViewVisitor } from '../../../domain/table/views/visitors/IViewVisitor';
 import type {
   IAutoNumberFieldOptionsDTO,
@@ -928,14 +933,25 @@ class ViewToPersistenceVisitor implements IViewVisitor<ITableViewPersistenceDTO>
     type: ITableViewPersistenceDTO['type']
   ): Result<ITableViewPersistenceDTO, DomainError> {
     return view.columnMeta().andThen((columnMeta) =>
-      view.queryDefaults().map((queryDefaults) => ({
-        id: view.id().toString(),
-        name: view.name().toString(),
-        type,
-        columnMeta: columnMeta.toDto(),
-        query: queryDefaults.toDto(),
-        ...(view.options() !== undefined ? { options: view.options() } : {}),
-      }))
+      view.queryDefaults().map((queryDefaults) => {
+        const metadataResult = view.auditMetadata();
+        const versionResult = view.version();
+        return {
+          id: view.id().toString(),
+          name: view.name().toString(),
+          type,
+          ...(versionResult.isOk() ? { version: versionResult.value.toNumber() } : {}),
+          ...view.properties().toDto(),
+          columnMeta: columnMeta.toDto(),
+          query: queryDefaults.toDto(),
+          ...(queryDefaults.sourceFilter() !== undefined
+            ? { sourceFilter: queryDefaults.sourceFilter() }
+            : {}),
+          ...(view.options() !== undefined ? { options: view.options() } : {}),
+          ...(view.order().isOk() ? { order: view.order()._unsafeUnwrap().toNumber() } : {}),
+          ...(metadataResult.isOk() ? metadataResult.value.toDto() : {}),
+        };
+      })
     );
   }
 }
@@ -1496,25 +1512,57 @@ export class DefaultTableMapper implements ITableMapper {
   private mapViewToDomain(dto: ITableViewPersistenceDTO): Result<View, DomainError> {
     return ViewId.create(dto.id).andThen((id) =>
       ViewName.create(dto.name).andThen((name) => {
-        const viewResult = match(dto.type)
-          .with('grid', () => GridView.create({ id, name }))
-          .with('kanban', () => KanbanView.create({ id, name }))
-          .with('gallery', () => GalleryView.create({ id, name }))
-          .with('calendar', () => CalendarView.create({ id, name }))
-          .with('form', () => FormView.create({ id, name }))
-          .with('plugin', () => PluginView.create({ id, name }))
-          .exhaustive();
+        return ViewProperties.rehydrate({
+          ...(dto.description !== undefined ? { description: dto.description } : {}),
+          ...(dto.isLocked !== undefined ? { isLocked: dto.isLocked } : {}),
+          ...(dto.enableShare !== undefined ? { enableShare: dto.enableShare } : {}),
+          ...(dto.shareId !== undefined ? { shareId: dto.shareId } : {}),
+          ...(dto.shareMeta !== undefined ? { shareMeta: dto.shareMeta } : {}),
+        }).andThen((properties) => {
+          const viewResult = createView({ type: dto.type, id, name, properties });
 
-        return viewResult.andThen((view) =>
-          ViewColumnMeta.rehydrate(dto.columnMeta).andThen((columnMeta) =>
-            view
-              .setColumnMeta(columnMeta)
-              .andThen(() => ViewQueryDefaults.rehydrate(dto.query ?? {}))
-              .andThen((queryDefaults) => view.setQueryDefaults(queryDefaults))
-              .andThen(() => view.setOptions(dto.options))
-              .map(() => view)
-          )
-        );
+          return viewResult.andThen((view) =>
+            ViewColumnMeta.rehydrate(dto.columnMeta).andThen((columnMeta) =>
+              view
+                .setColumnMeta(columnMeta)
+                .andThen(() =>
+                  ViewQueryDefaults.rehydrate(dto.query ?? {}, {
+                    sourceFilter: dto.sourceFilter,
+                  })
+                )
+                .andThen((queryDefaults) => view.setQueryDefaults(queryDefaults))
+                .andThen(() => view.setOptions(dto.options))
+                .andThen(() =>
+                  dto.order === undefined
+                    ? ok(undefined)
+                    : ViewOrder.rehydrate(dto.order).andThen((order) => view.setOrder(order))
+                )
+                .andThen(() =>
+                  dto.version === undefined
+                    ? ok(undefined)
+                    : ViewVersion.rehydrate(dto.version).andThen((version) =>
+                        view.setVersion(version)
+                      )
+                )
+                .andThen(() => {
+                  if (dto.createdBy === undefined && dto.createdTime === undefined) {
+                    return ok(undefined);
+                  }
+                  return ViewAuditMetadata.rehydrate({
+                    createdBy: dto.createdBy,
+                    createdTime: dto.createdTime,
+                    ...(dto.lastModifiedBy !== undefined
+                      ? { lastModifiedBy: dto.lastModifiedBy }
+                      : {}),
+                    ...(dto.lastModifiedTime !== undefined
+                      ? { lastModifiedTime: dto.lastModifiedTime }
+                      : {}),
+                  }).andThen((metadata) => view.setAuditMetadata(metadata));
+                })
+                .map(() => view)
+            )
+          );
+        });
       })
     );
   }

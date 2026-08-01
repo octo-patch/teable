@@ -402,6 +402,8 @@
       "tableTrashRead": "Read table trash",
       "tableTrashUpdate": "Update table trash",
       "tableTrashReset": "Reset table trash",
+      "tableArchiveRead": "Read table archive",
+      "tableArchiveManage": "Manage table archive",
       "viewCreate": "Create view",
       "viewDelete": "Delete view",
       "viewRead": "Read view",
@@ -417,6 +419,7 @@
       "recordRead": "Read record",
       "recordUpdate": "Update record",
       "recordCopy": "Copy record",
+      "recordArchive": "Archive record",
       "automationCreate": "Create automation",
       "automationDelete": "Delete automation",
       "automationRead": "Read automation",
@@ -950,15 +953,18 @@
       "nameMaxLength": "Name is too long. Maximum is {{max}} characters.",
       "descriptionMaxLength": "Description is too long. Maximum is {{max}} characters."
     },
-    "validation": {
-      "field": {
-        "unique": "Field must have a unique value"
-      }
-    },
     "custom": {
       "fieldValueNotNull": "\"{{tableName}}\" field \"{{fieldName}}\" does not allow empty values, please fill in completely before submitting.",
       "fieldValueDuplicate": "\"{{tableName}}\" field \"{{fieldName}}\" does not allow duplicate values, please fill in a unique value before submitting.",
+      "recordFieldValueNotNull": "Field \"{{fieldName}}\" does not allow empty values, please fill it in before submitting.",
+      "recordFieldValueDuplicate": "Field \"{{fieldName}}\" does not allow duplicate values, please fill in a unique value before submitting.",
       "linkFieldValueDuplicate": "\"{{fieldName}}\" field does not allow duplicate associations with the same record",
+      "linkBatchDuplicate": "Cannot link record(s): already linked by another record in the same batch. In one-to-many relationships, each record can only belong to one parent.",
+      "linkOneManyDuplicate": "Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.",
+      "linkOneOneDuplicate": "Cannot link record(s): the target record is already linked by another record in a one-to-one relationship.",
+      "fieldMaxColumnLimit": "Table \"{{tableName}}\" can have at most {{maxFieldCount}} fields.",
+      "fieldRequiredExistingValues": "Cannot mark field \"{{fieldName}}\" as required because existing records contain empty values.",
+      "fieldUniqueExistingValues": "Cannot mark field \"{{fieldName}}\" as unique because existing records contain duplicate values.",
       "requestTimeout": "This action is too large, please try with a smaller scope.",
       "searchTimeOut": "Search timeout, please decrease the search scope and try again",
       "dependencyNodeRequire": "Dependency node not tested, please check if all previous nodes have been tested",

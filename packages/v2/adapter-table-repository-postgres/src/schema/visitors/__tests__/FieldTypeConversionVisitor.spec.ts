@@ -271,11 +271,12 @@ describe('FieldTypeConversionVisitor', () => {
     });
 
     describe('text -> rating', () => {
-      it('should generate SQL to parse and clamp values to max rating', () => {
+      it('should generate SQL to round and normalize values to the valid rating range', () => {
         const sqls = getVisitorSqls(mkTextField(), mkRatField(5));
         expect(sqls).toHaveLength(1);
-        expect(sqls[0]).toContain('GREATEST(0');
-        expect(sqls[0]).toContain('LEAST(FLOOR');
+        expect(sqls[0]).toContain('ROUND');
+        expect(sqls[0]).toContain('< 1 THEN NULL');
+        expect(sqls[0]).toContain('LEAST');
       });
 
       it('should respect the rating max from field configuration', () => {
@@ -454,14 +455,14 @@ describe('FieldTypeConversionVisitor', () => {
     });
 
     describe('number -> rating', () => {
-      it('should generate SQL to clamp values to rating max', () => {
+      it('should generate SQL to round and normalize values to the valid rating range', () => {
         const sqls = getVisitorSqls(mkSrcNumField(), mkRatField(5));
         expect(sqls).toHaveLength(1);
         const sql = sqls[0];
         expect(sql).toContain('UPDATE');
-        expect(sql).toContain('GREATEST(0');
-        expect(sql).toContain('LEAST(FLOOR');
-        expect(sql).toContain('$1');
+        expect(sql).toContain('ROUND');
+        expect(sql).toContain('< 1 THEN NULL');
+        expect(sql).toContain('LEAST');
       });
     });
 
@@ -1282,6 +1283,18 @@ describe('FieldTypeConversionVisitor', () => {
       expect(migrateSql).toBeDefined();
       expect(migrateSql).not.toContain('to_char');
       expect(migrateSql).not.toContain('::text');
+    });
+
+    it('should round and normalize number formula values to the valid rating range', () => {
+      const formulaField = mkFormulaNumberField();
+      const ratingField = mkRatField(5);
+      const sqls = getConversionSqls(formulaField, ratingField);
+
+      const migrateSql = sqls.find((s) => s.includes('UPDATE') && s.includes('__tmp_formula_src_'));
+      expect(migrateSql).toContain('ROUND');
+      expect(migrateSql).toContain('< 1 THEN NULL');
+      expect(migrateSql).toContain('LEAST');
+      expect(migrateSql).toContain('5');
     });
 
     it('should produce NULL for datetime formula → number (incompatible)', () => {

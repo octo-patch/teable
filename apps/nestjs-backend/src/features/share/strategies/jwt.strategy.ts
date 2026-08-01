@@ -20,6 +20,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, SHARE_JWT_STRATEGY) 
       jwtFromRequest: ExtractJwt.fromExtractors([JwtStrategy.fromAuthCookieAsToken]),
       ignoreExpiration: false,
       secretOrKey: config.jwt.secret,
+      passReqToCallback: true,
     });
   }
 
@@ -29,9 +30,13 @@ export class JwtStrategy extends PassportStrategy(Strategy, SHARE_JWT_STRATEGY) 
     return cookieObj?.[shareId] ?? null;
   }
 
-  async validate(payload: IJwtShareInfo) {
+  async validate(req: Request & { useV2?: boolean }, payload: IJwtShareInfo) {
     const { shareId, password } = payload;
-    const authShareId = await this.shareAuthService.authShareView(shareId, password);
+    const authShareId = await this.shareAuthService.authShareView(
+      shareId,
+      password,
+      req.useV2 === true
+    );
     if (!authShareId) {
       throw new UnauthorizedException();
     }

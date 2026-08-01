@@ -6,6 +6,11 @@ import { createAllFieldTypesFields, tableTemplates } from '@teable/v2-table-temp
 import { sql } from 'kysely';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getSharedTestContext, type SharedTestContext } from './shared/globalTestContext';
+import {
+  ensureAttachmentTables,
+  makeAttachmentCell,
+  seedAttachment,
+} from './update-field/attachment/testUtils';
 
 describe('v2 http createTable (e2e)', () => {
   let ctx: SharedTestContext;
@@ -303,6 +308,12 @@ describe('v2 http createTable (e2e)', () => {
       tagField.options && typeof tagField.options === 'object' && 'choices' in tagField.options
         ? (tagField.options as { choices?: Array<{ id?: string; name: string }> }).choices ?? []
         : [];
+    await ensureAttachmentTables(ctx);
+    const attachment = await seedAttachment(ctx);
+
+    // "Files" is notNull and [] normalizes to null (v1 contract), so seed a real attachment
+    await ensureAttachmentTables(ctx);
+    const seededAttachment = await seedAttachment(ctx);
 
     await ctx.createRecord(created.id, {
       Name: 'owner@example.com',
@@ -315,7 +326,7 @@ describe('v2 http createTable (e2e)', () => {
         .map((choice) => choice.id)
         .filter((id): id is string => Boolean(id)),
       Done: true,
-      Files: [],
+      Files: makeAttachmentCell(seededAttachment, 'all-field-types.txt'),
       'Due Date': '2025-02-10T00:00:00.000Z',
       Company: { id: companyRecord.id },
     });

@@ -14,6 +14,10 @@ export interface ICacheStore {
   [key: `auth:session-store:${string}`]: ISessionData;
   [key: `auth:session-user:${string}`]: Record<string, number>;
   [key: `auth:session-expire:${string}`]: boolean;
+  // Epoch seconds of the user's last clearByUserId, kept for the session ttl:
+  // distinguishes "revoked by sign-out-everywhere" from "lost the concurrent
+  // read-modify-write on the per-user session map".
+  [key: `auth:session-user-cleared:${string}`]: number;
   [key: `oauth2:${string}`]: IOauth2State;
   [key: `reset-password-email:${string}`]: IResetPasswordEmailCache;
   [key: `workflow:running:${string}`]: string;
@@ -125,6 +129,7 @@ export enum OperationName {
   UpdateView = 'updateView',
   CreateRecords = 'createRecords',
   DeleteRecords = 'deleteRecords',
+  ArchiveRecords = 'archiveRecords',
   UpdateRecords = 'updateRecords',
   UpdateRecordsOrder = 'updateRecordsOrder',
   CreateFields = 'createFields',
@@ -189,6 +194,19 @@ export interface ICreateRecordsOperation extends IUndoRedoOperationBase {
 
 export interface IDeleteRecordsOperation extends Omit<ICreateRecordsOperation, 'name'> {
   name: OperationName.DeleteRecords;
+}
+
+// The archived snapshots stay in record_trash (write-ahead), so the stack entry only
+// carries ids: undo restores the rows matched by operationId, redo re-archives by id.
+export interface IArchiveRecordsOperation extends IUndoRedoOperationBase {
+  name: OperationName.ArchiveRecords;
+  params: {
+    tableId: string;
+  };
+  result: {
+    recordIds: string[];
+  };
+  operationId: string;
 }
 
 export interface IConvertFieldOperation extends IUndoRedoOperationBase {
@@ -294,6 +312,7 @@ export type IUndoRedoOperation =
   | IUpdateRecordsOperation
   | ICreateRecordsOperation
   | IDeleteRecordsOperation
+  | IArchiveRecordsOperation
   | IUpdateRecordsOrderOperation
   | ICreateFieldsOperation
   | IDeleteFieldsOperation

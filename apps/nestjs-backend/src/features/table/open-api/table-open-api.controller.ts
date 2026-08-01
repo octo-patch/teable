@@ -74,8 +74,12 @@ export class TableController {
   ) {}
 
   @Permissions('table|read')
+  @UseV2Feature('getDefaultViewId')
   @Get(':tableId/default-view-id')
   async getDefaultViewId(@Param('tableId') tableId: string): Promise<{ id: string }> {
+    if (this.cls.get('useV2')) {
+      return await this.tableOpenApiV2Service.getDefaultViewId(tableId);
+    }
     return await this.tableService.getDefaultViewId(tableId);
   }
 

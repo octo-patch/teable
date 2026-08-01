@@ -269,7 +269,7 @@ describe('V2RecordTrashService', () => {
         resource_type: 'record',
         snapshot: JSON.stringify(['recFirstRecordId01', 'recSecondRecordId2']),
         created_by: 'usrTestUserId',
-        created_time: expect.any(Date),
+        created_time: expect.any(String),
       },
     });
     expect(operations[1].table).toBe('record_trash');

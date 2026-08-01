@@ -102,17 +102,6 @@
     "help": "Daha fazla bilgi için <HelpCenter /> adresini ziyaret edin",
     "helpCenter": "Yardım Merkezi"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "Kayıt bağlanamıyor: aynı grupta bu kayıt zaten başka bir kayıt tarafından bağlanmış. Bire-çok ilişkilerde her alt kayıt yalnızca bir üst kayda ait olabilir.",
-      "one_many_duplicate": "Kayıt bağlanamıyor: bu kayıt zaten başka bir kayda bağlı. Bire-çok ilişkilerde her alt kayıt yalnızca bir üst kayda ait olabilir.",
-      "one_one_duplicate": "Kayıt bağlanamıyor: hedef kayıt bire-bir ilişkide zaten başka bir kayıt tarafından bağlanmış."
-    },
-    "field": {
-      "maxColumnLimit": "\"{{tableName}}\" tablosunda en fazla {{maxFieldCount}} alan olabilir.",
-      "requiredExistingValues": "\"{{fieldName}}\" alanı zorunlu olarak işaretlenemez çünkü mevcut kayıtlarda boş değerler var."
-    }
-  },
   "field": {
     "advancedProps": "Gelişmiş özellikler",
     "hide": "gizle",
@@ -477,6 +466,11 @@
       "fillFailed": "Doldurma başarısız",
       "clearing": "Temizleniyor...",
       "clearSuccessful": "Temizleme başarılı",
+      "archiveRecordConfirmTitle": "Kayıtları arşivle",
+      "archiveRecordConfirmDescription": "Bu işlem {{recordCount}} kaydı arşivleyecek. Arşivlenen kayıtlar tablo arşivinden görüntülenebilir ve geri yüklenebilir.",
+      "archiveRecord": "Arşivle",
+      "archiving": "Arşivleniyor...",
+      "archiveSuccessful": "Arşivleme başarılı",
       "deleting": "Siliniyor...",
       "deleteSuccessful": "Silme başarılı",
       "deleteStream": {
@@ -819,6 +813,8 @@
     "insertRecordBelow": "Alta <input /> kayıt ekle",
     "deleteRecord": "Kaydı sil",
     "deleteAllSelectedRecords": "Seçili tüm kayıtları sil",
+    "archiveRecord": "Kaydı arşivle",
+    "archiveAllSelectedRecords": "Seçili tüm kayıtları arşivle",
     "editField": "Alanı düzenle",
     "insertFieldLeft": "Sola ekle",
     "insertFieldRight": "Sağa ekle",
@@ -934,7 +930,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "Kopya olarak kaydedebilir",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "Bir kopyayı alanınıza kaydedin",
+    "editRequiresLogin": "Kayıtları düzenlemek için giriş yapın",
     "enterPassword": "Şifre girin",
     "allowCopyData": "İzleyicilerin veri kopyalamasına izin ver",
     "sharedNode": "Paylaşılan düğüm",
@@ -997,6 +996,50 @@
       "imageNotSupported": "Görsel desteklenmiyor",
       "tooManyFiles": "Mesaj başına en fazla {{count}} dosya ekleyebilirsiniz",
       "storageFull": "Sandbox depolama alanı dolu. Bazı dosyaları silip tekrar deneyin."
+    }
+  },
+  "tableTrash": {
+    "title": "Tablo çöp kutusu",
+    "resourceType": "Tür",
+    "deletedResource": "Kaynak",
+    "moreResources": "ve {{count}} tane daha",
+    "deletedTime": "Silinme zamanı",
+    "deletedBy": "Silen kullanıcı",
+    "filterAllTypes": "Tüm türler",
+    "filterAllUsers": "Tüm kullanıcılar",
+    "filterDeletedTime": "Silinme zamanı",
+    "clearFilter": "Filtreleri temizle",
+    "recordsDialogTitle": "Silinen kayıtlar ({{count}})",
+    "recordDetail": "Kayıt ayrıntıları",
+    "filterAllCreators": "Tüm oluşturanlar",
+    "filterCreatedTime": "Oluşturulma zamanı",
+    "searchPlaceholder": "Kayıtları ara"
+  },
+  "tableArchive": {
+    "title": "Tablo arşivi",
+    "menuTitle": "Arşiv",
+    "archivedTime": "Arşivlenme zamanı",
+    "archivedBy": "Arşivleyen",
+    "recordDetail": "Kayıt detayı",
+    "empty": "Arşivlenmiş kayıt yok",
+    "allCreators": "Tüm oluşturanlar",
+    "filterArchivedTime": "Arşivlenme zamanı",
+    "searchPlaceholder": "Arşivlenmiş kayıtları ara",
+    "clearFilter": "Filtreyi temizle",
+    "export": "CSV olarak dışa aktar",
+    "exporting": "Dışa aktarılıyor… {{count}} satır",
+    "exportSucceed": "Dışa aktarma tamamlandı, indirme başlıyor",
+    "restoreSelected": "Geri yükle ({{count}})",
+    "permanentDeleteSelected": "Kalıcı olarak sil ({{count}})",
+    "permanentDeleteConfirm": "{{count}} arşivlenmiş kayıt kalıcı olarak silinsin mi? Bu işlem geri alınamaz.",
+    "permanentDeleteSucceed": "Kalıcı olarak silindi",
+    "resetArchive": "Arşivi temizle",
+    "resetArchiveConfirm": "Bu tablonun tüm arşivlenmiş kayıtları temizlensin mi? Bu işlem geri alınamaz.",
+    "resetSucceed": "Arşiv temizlendi",
+    "orderBy": {
+      "archivedTime": "Arşivlenme zamanına göre sırala",
+      "recordCreatedTime": "Oluşturulma zamanına göre sırala",
+      "recordLastModifiedTime": "Son değiştirilme zamanına göre sırala"
     }
   },
   "baseNode": {

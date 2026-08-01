@@ -103,17 +103,6 @@
     "help": "Visit the <HelpCenter /> for more information",
     "helpCenter": "Help center"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "Cannot link record(s): already linked by another record in the same batch. In one-to-many relationships, each record can only belong to one parent.",
-      "one_many_duplicate": "Cannot link record(s): already linked to another record. In one-to-many relationships, each record can only belong to one parent.",
-      "one_one_duplicate": "Cannot link record(s): the target record is already linked by another record in a one-to-one relationship."
-    },
-    "field": {
-      "maxColumnLimit": "Table \"{{tableName}}\" can have at most {{maxFieldCount}} fields.",
-      "requiredExistingValues": "Cannot mark field \"{{fieldName}}\" as required because existing records contain empty values."
-    }
-  },
   "field": {
     "advancedProps": "Advanced properties",
     "hide": "hide",
@@ -517,6 +506,11 @@
       "clearFailed": "Clear failed",
       "clearConfirmTitle": "Clear data",
       "clearConfirmDescription": "This action will clear {{cellCount}} cells in {{rowCount}} records. Are you sure you want to continue?",
+      "archiveRecordConfirmTitle": "Archive records",
+      "archiveRecordConfirmDescription": "This action will archive {{recordCount}} records. Archived records can be viewed and restored from the table archive.",
+      "archiveRecord": "Archive",
+      "archiving": "Archiving...",
+      "archiveSuccessful": "Archive successful",
       "deleteRecordConfirmTitle": "Delete records",
       "deleteRecordConfirmDescription": "This action will delete {{recordCount}} records. Are you sure you want to continue?",
       "duplicateRecordsConfirmTitle": "Duplicate records",
@@ -1077,6 +1071,8 @@
     "insertRecordBelow": "Insert <input /> record below",
     "deleteRecord": "Delete record",
     "deleteAllSelectedRecords": "Delete all selected records",
+    "archiveRecord": "Archive record",
+    "archiveAllSelectedRecords": "Archive all selected records",
     "duplicateRecords": "Duplicate selected records",
     "editField": "Edit field",
     "duplicateField": "Duplicate field",
@@ -1147,11 +1143,49 @@
     "title": "Do you want to add multiple records?",
     "description": "The {{count}} records will be added to the table."
   },
+  "tableArchive": {
+    "title": "Table archive",
+    "menuTitle": "Archive",
+    "archivedTime": "Archived time",
+    "archivedBy": "Archived by",
+    "recordDetail": "Record detail",
+    "empty": "No archived records",
+    "allCreators": "All creators",
+    "filterArchivedTime": "Archived time",
+    "searchPlaceholder": "Search archived records",
+    "clearFilter": "Clear filter",
+    "export": "Export CSV",
+    "exporting": "Exporting... {{count}} rows",
+    "exportSucceed": "Export complete, downloading",
+    "restoreSelected": "Restore ({{count}})",
+    "permanentDeleteSelected": "Permanently delete ({{count}})",
+    "permanentDeleteConfirm": "Permanently delete {{count}} archived records? This cannot be undone.",
+    "permanentDeleteSucceed": "Permanently deleted",
+    "resetArchive": "Clear archive",
+    "resetArchiveConfirm": "Clear all archived records of this table? This cannot be undone.",
+    "resetSucceed": "Archive cleared",
+    "orderBy": {
+      "archivedTime": "Sort by archived time",
+      "recordCreatedTime": "Sort by created time",
+      "recordLastModifiedTime": "Sort by last modified time"
+    }
+  },
   "tableTrash": {
     "title": "Trash",
     "resourceType": "Type",
     "deletedResource": "Resource",
-    "moreResources": "and {{count}} more"
+    "moreResources": "and {{count}} more",
+    "deletedTime": "Deleted time",
+    "deletedBy": "Deleted by",
+    "filterAllTypes": "All types",
+    "filterAllUsers": "All users",
+    "filterDeletedTime": "Deleted time",
+    "clearFilter": "Clear filter",
+    "recordsDialogTitle": "Deleted records ({{count}})",
+    "recordDetail": "Record details",
+    "filterAllCreators": "All creators",
+    "filterCreatedTime": "Created time",
+    "searchPlaceholder": "Search records"
   },
   "pluginPanel": {
     "empty": {
@@ -1205,7 +1239,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "Can save as copy",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "Save a copy to your space",
+    "editRequiresLogin": "Sign in to edit records",
     "enterPassword": "Enter password",
     "allowCopyData": "Allow viewers to copy data",
     "sharedNode": "Shared node",

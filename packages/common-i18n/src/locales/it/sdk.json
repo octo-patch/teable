@@ -386,6 +386,8 @@
       "tableTrashRead": "Leggi cestino della tabella",
       "tableTrashUpdate": "Aggiorna cestino della tabella",
       "tableTrashReset": "Reimposta cestino della tabella",
+      "tableArchiveRead": "Leggi archivio della tabella",
+      "tableArchiveManage": "Gestisci archivio della tabella",
       "viewCreate": "Crea vista",
       "viewDelete": "Elimina vista",
       "viewRead": "Leggi vista",
@@ -401,6 +403,7 @@
       "recordRead": "Leggi record",
       "recordUpdate": "Aggiorna record",
       "recordCopy": "Copy record",
+      "recordArchive": "Archivia record",
       "automationCreate": "Crea automazione",
       "automationDelete": "Elimina automazione",
       "automationRead": "Leggi automazione",
@@ -926,15 +929,18 @@
       "nameMaxLength": "Il nome è troppo lungo. Il massimo è {{max}} caratteri.",
       "descriptionMaxLength": "La descrizione è troppo lunga. Il massimo è {{max}} caratteri."
     },
-    "validation": {
-      "field": {
-        "unique": "Il campo deve avere un valore unico"
-      }
-    },
     "custom": {
       "fieldValueNotNull": "\"{{tableName}}\" campo \"{{fieldName}}\" non consente valori vuoti, per favore riempilo completamente prima di inviare.",
       "fieldValueDuplicate": "\"{{tableName}}\" campo \"{{fieldName}}\" non consente valori duplicati, per favore riempilo con un valore unico prima di inviare.",
+      "recordFieldValueNotNull": "Il campo \"{{fieldName}}\" non consente valori vuoti, per favore riempilo completamente prima di inviare.",
+      "recordFieldValueDuplicate": "Il campo \"{{fieldName}}\" non consente valori duplicati, per favore riempilo con un valore unico prima di inviare.",
       "linkFieldValueDuplicate": "\"{{fieldName}}\" campo non consente associazioni duplicate con lo stesso record",
+      "linkBatchDuplicate": "Impossibile collegare il record: nello stesso batch è già collegato da un altro record. Nelle relazioni uno-a-molti, ogni record figlio può appartenere a un solo record padre.",
+      "linkOneManyDuplicate": "Impossibile collegare il record: è già collegato a un altro record. Nelle relazioni uno-a-molti, ogni record figlio può appartenere a un solo record padre.",
+      "linkOneOneDuplicate": "Impossibile collegare il record: il record di destinazione è già collegato da un altro record in una relazione uno-a-uno.",
+      "fieldMaxColumnLimit": "La tabella \"{{tableName}}\" può avere al massimo {{maxFieldCount}} campi.",
+      "fieldRequiredExistingValues": "Impossibile contrassegnare il campo \"{{fieldName}}\" come obbligatorio perché i record esistenti contengono valori vuoti.",
+      "fieldUniqueExistingValues": "Impossibile contrassegnare il campo \"{{fieldName}}\" come univoco perché i record esistenti contengono valori duplicati.",
       "requestTimeout": "L'azione corrente è troppo grande, per favore riprova con un ambito più piccolo.",
       "searchTimeOut": "La ricerca ha scaduto, per favore ridurre l'ambito di ricerca e riprova.",
       "dependencyNodeRequire": "Il nodo dipendente non è stato testato, per favore controlla se tutti i nodi precedenti sono stati testati",

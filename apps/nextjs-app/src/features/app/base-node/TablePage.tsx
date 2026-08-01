@@ -4,9 +4,10 @@ import type { IViewVo } from '@teable/core';
 import { BaseNodeResourceType, LastVisitResourceType } from '@teable/openapi';
 import { ReactQueryKeys } from '@teable/sdk/config';
 import dynamic from 'next/dynamic';
+import { TableSkeleton } from '@/features/app/blocks/table/TableSkeleton';
 import type { IBaseResourceParsed } from '@/features/app/hooks/useBaseResource';
 import { getViewPageServerData } from '@/lib/view-pages-data';
-import { getDefaultViewId, redirect, validateResourceExists } from './helper';
+import { getDefaultNodeUrl, getDefaultViewId, redirect, validateResourceExists } from './helper';
 import type { ISSRContext, SSRResult, ITablePageProps } from './types';
 
 interface IQueryParams {
@@ -66,7 +67,17 @@ export const getTableServerSideProps = async (
       : null,
   ]);
 
-  if (tableList.length === 0) return { notFound: true };
+  // The base has no tables left (e.g. a prefetched entry URL outlived the
+  // deletion of the base's only table) — degrade instead of 404ing. Resolve
+  // the default node ourselves with every table node filtered out: a stale
+  // node-list cache can otherwise still name a deleted table, and bouncing
+  // through /base/{baseId} would loop back here until the cache expires.
+  if (tableList.length === 0) {
+    const nonTableUrl = await getDefaultNodeUrl(ctx, {
+      filterNode: (node) => node.resourceType !== BaseNodeResourceType.Table,
+    });
+    return redirect(nonTableUrl ?? `/base/${baseId}`);
+  }
 
   // If table doesn't exist, redirect to default node
   const validationResult = await validateResourceExists(ctx, {
@@ -147,6 +158,9 @@ const DynamicTable = dynamic(
   () => import('@/features/app/blocks/table/Table').then((mod) => mod.Table),
   {
     ssr: false,
+    // Rendered into the SSR HTML and kept until the table chunk hydrates, so a
+    // hard refresh shows the same shell as the space→base transition overlay
+    loading: () => <TableSkeleton />,
   }
 );
 

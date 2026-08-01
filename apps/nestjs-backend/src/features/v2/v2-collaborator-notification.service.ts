@@ -123,6 +123,11 @@ const getUserId = (value: unknown): string | null => {
   return typeof userId === 'string' && userId ? userId : null;
 };
 
+const hasUserCandidate = (value: unknown): boolean => {
+  const candidates = Array.isArray(value) ? value : [value];
+  return candidates.some((candidate) => getUserId(candidate) !== null);
+};
+
 @Injectable()
 export class V2CollaboratorNotificationDispatcher {
   private readonly logger = new Logger(V2CollaboratorNotificationDispatcher.name);
@@ -351,6 +356,13 @@ export class V2RecordsBatchUpdatedCollaboratorNotificationProjection
     event: RecordsBatchUpdated
   ): Promise<Result<void, DomainError>> {
     if (event.source !== 'user') {
+      return ok(undefined);
+    }
+
+    const hasCandidate = event.updates.some((update) =>
+      update.changes.some((change) => hasUserCandidate(change.newValue))
+    );
+    if (!hasCandidate) {
       return ok(undefined);
     }
 

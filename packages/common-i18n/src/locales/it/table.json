@@ -107,17 +107,6 @@
     "help": "Visita il <HelpCenter /> per maggiori informazioni.",
     "helpCenter": "Centro Assistenza"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "Impossibile collegare il record: nello stesso batch è già collegato da un altro record. Nelle relazioni uno-a-molti, ogni record figlio può appartenere a un solo record padre.",
-      "one_many_duplicate": "Impossibile collegare il record: è già collegato a un altro record. Nelle relazioni uno-a-molti, ogni record figlio può appartenere a un solo record padre.",
-      "one_one_duplicate": "Impossibile collegare il record: il record di destinazione è già collegato da un altro record in una relazione uno-a-uno."
-    },
-    "field": {
-      "maxColumnLimit": "La tabella \"{{tableName}}\" può avere al massimo {{maxFieldCount}} campi.",
-      "requiredExistingValues": "Impossibile contrassegnare il campo \"{{fieldName}}\" come obbligatorio perché i record esistenti contengono valori vuoti."
-    }
-  },
   "field": {
     "advancedProps": "Proprietà avanzate",
     "hide": "nascondi",
@@ -483,6 +472,11 @@
       "fillFailed": "Riempimento fallito",
       "clearing": "Cancellazione in corso...",
       "clearSuccessful": "Cancellazione riuscita",
+      "archiveRecordConfirmTitle": "Archivia record",
+      "archiveRecordConfirmDescription": "Questa azione archivierà {{recordCount}} record. I record archiviati possono essere visualizzati e ripristinati dall'archivio della tabella.",
+      "archiveRecord": "Archivia",
+      "archiving": "Archiviazione...",
+      "archiveSuccessful": "Archiviazione riuscita",
       "deleting": "Eliminazione in corso...",
       "deleteSuccessful": "Eliminazione riuscita",
       "deleteStream": {
@@ -839,6 +833,8 @@
     "insertRecordBelow": "Inserisci <input /> record sotto",
     "deleteRecord": "Elimina record",
     "deleteAllSelectedRecords": "Elimina tutti i record selezionati",
+    "archiveRecord": "Archivia record",
+    "archiveAllSelectedRecords": "Archivia tutti i record selezionati",
     "editField": "Modifica campo",
     "insertFieldLeft": "Inserisci a sinistra",
     "insertFieldRight": "Inserisci a destra",
@@ -906,11 +902,49 @@
     "title": "Vuoi aggiungere più record?",
     "description": "I {{count}} record saranno aggiunti alla tabella."
   },
+  "tableArchive": {
+    "title": "Archivio della tabella",
+    "menuTitle": "Archivio",
+    "archivedTime": "Data di archiviazione",
+    "archivedBy": "Archiviato da",
+    "recordDetail": "Dettaglio del record",
+    "empty": "Nessun record archiviato",
+    "allCreators": "Tutti i creatori",
+    "filterArchivedTime": "Data di archiviazione",
+    "searchPlaceholder": "Cerca record archiviati",
+    "clearFilter": "Cancella filtri",
+    "export": "Esporta CSV",
+    "exporting": "Esportazione… {{count}} righe",
+    "exportSucceed": "Esportazione completata, download in corso",
+    "restoreSelected": "Ripristina ({{count}})",
+    "permanentDeleteSelected": "Elimina definitivamente ({{count}})",
+    "permanentDeleteConfirm": "Eliminare definitivamente {{count}} record archiviati? Questa azione non può essere annullata.",
+    "permanentDeleteSucceed": "Eliminato definitivamente",
+    "resetArchive": "Svuota archivio",
+    "resetArchiveConfirm": "Svuotare tutti i record archiviati di questa tabella? Questa azione non può essere annullata.",
+    "resetSucceed": "Archivio svuotato",
+    "orderBy": {
+      "archivedTime": "Ordina per data di archiviazione",
+      "recordCreatedTime": "Ordina per data di creazione",
+      "recordLastModifiedTime": "Ordina per ultima modifica"
+    }
+  },
   "tableTrash": {
     "title": "Cestino",
     "resourceType": "Tipo",
     "deletedResource": "Risorsa",
-    "moreResources": "e altri {{count}}"
+    "moreResources": "e altri {{count}}",
+    "deletedTime": "Data di eliminazione",
+    "deletedBy": "Eliminato da",
+    "filterAllTypes": "Tutti i tipi",
+    "filterAllUsers": "Tutti gli utenti",
+    "filterDeletedTime": "Data di eliminazione",
+    "clearFilter": "Cancella filtri",
+    "recordsDialogTitle": "Record eliminati ({{count}})",
+    "recordDetail": "Dettagli del record",
+    "filterAllCreators": "Tutti i creatori",
+    "filterCreatedTime": "Data di creazione",
+    "searchPlaceholder": "Cerca record"
   },
   "baseShare": {
     "shareTitle": "Condividi",
@@ -940,7 +974,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "Può salvare come copia",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "Salva una copia nel tuo spazio",
+    "editRequiresLogin": "Accedi per modificare i record",
     "enterPassword": "Inserisci password",
     "allowCopyData": "Consenti agli spettatori di copiare i dati",
     "sharedNode": "Nodo condiviso",

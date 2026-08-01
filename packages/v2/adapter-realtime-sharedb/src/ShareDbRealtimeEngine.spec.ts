@@ -527,6 +527,37 @@ describe('ShareDbRealtimeEngine', () => {
     ]);
   });
 
+  it('publishes collection-only invalidation without a synthetic document', async () => {
+    const actorId = ActorId.create('test-actor')._unsafeUnwrap();
+    const context = { actorId, requestId: 'manual-sort-request' };
+    let publishedChannels: ReadonlyArray<string> = [];
+    let publishedOp: unknown;
+    const publisher = {
+      publish: async (channels: ReadonlyArray<string>, op: unknown) => {
+        publishedChannels = channels;
+        publishedOp = op;
+        return ok(undefined);
+      },
+    };
+    const engine = new ShareDbRealtimeEngine(publisher as unknown as ShareDbBackendPublisher);
+
+    const result = await engine.invalidateCollection(context, 'rec_tbl_test', {
+      type: 'set',
+      path: ['fields', '__row_viw_test'],
+      value: null,
+      oldValue: null,
+    });
+
+    expect(result.isOk()).toBe(true);
+    expect(publishedChannels).toEqual(['rec_tbl_test']);
+    expect(publishedOp).toMatchObject({
+      c: 'rec_tbl_test',
+      src: '@@v2-projection:manual-sort-request',
+      op: [{ p: ['fields', '__row_viw_test'], oi: null, od: null }],
+    });
+    expect(publishedOp).not.toHaveProperty('d');
+  });
+
   it('delivers delete ops to subscribed clients', async () => {
     if (!runtime) throw new Error('Missing ShareDB runtime');
 

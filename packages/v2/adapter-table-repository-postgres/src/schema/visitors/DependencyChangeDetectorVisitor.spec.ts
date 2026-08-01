@@ -61,6 +61,7 @@ describe('DependencyChangeDetectorVisitor', () => {
     const noOpMethods = [
       'visit',
       'visitTableRename',
+      'visitTableAddView',
       'visitTableAddSelectOptions',
       'visitTableDuplicateField',
       'visitTableRemoveField',
@@ -68,6 +69,8 @@ describe('DependencyChangeDetectorVisitor', () => {
       'visitTableUpdateViewQueryDefaults',
       'visitTableByBaseId',
       'visitTableById',
+      'visitTableByViewId',
+      'visitTableWithViewIds',
       'visitTableByIncomingReferenceToTable',
       'visitTableByIds',
       'visitTableByName',

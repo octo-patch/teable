@@ -74,7 +74,9 @@ export const TableListItem: React.FC<IProps> = ({
           <div onClick={(e) => e.stopPropagation()}>
             <EmojiPicker
               className="flex size-5 items-center justify-center hover:bg-muted-foreground/60"
+              icon={table.icon}
               onChange={(icon: string) => table.updateIcon(icon)}
+              onRemove={() => table.updateIcon(null)}
               disabled={!table.permission?.['table|update']}
             >
               {table.icon ? (

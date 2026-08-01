@@ -13,6 +13,7 @@ import {
 import type { DomainError } from '../domain/shared/DomainError';
 import { domainError } from '../domain/shared/DomainError';
 import type { IDomainEvent } from '../domain/shared/DomainEvent';
+import { tableDataSafetyLimitErrors } from '../domain/shared/TableDataSafetyLimits';
 import type { RecordValuesDTO } from '../domain/table/events/RecordFieldValuesDTO';
 import { RecordsBatchCreated } from '../domain/table/events/RecordsBatchCreated';
 import { FieldName } from '../domain/table/fields/FieldName';
@@ -255,12 +256,16 @@ export class ImportCsvHandler implements ICommandHandler<ImportCsvCommand, Impor
               if (command.maxRowCount !== undefined && rows && rows.length > command.maxRowCount) {
                 return err(
                   domainError.validation({
-                    code: 'validation.limit.rows_per_table_max',
+                    code: tableDataSafetyLimitErrors.rowsPerTableMax.code,
                     message: `Exceed max row limit: ${command.maxRowCount}`,
                     details: {
                       max: command.maxRowCount,
                       maxRowCount: command.maxRowCount,
                       rowCount: rows.length,
+                    },
+                    localization: {
+                      i18nKey: tableDataSafetyLimitErrors.rowsPerTableMax.i18nKey,
+                      context: { max: command.maxRowCount },
                     },
                   })
                 );
@@ -825,12 +830,16 @@ export class ImportCsvHandler implements ICommandHandler<ImportCsvCommand, Impor
       rowCount += 1;
       if (maxRowCount !== undefined && rowCount > maxRowCount) {
         throw domainError.validation({
-          code: 'validation.limit.rows_per_table_max',
+          code: tableDataSafetyLimitErrors.rowsPerTableMax.code,
           message: `Exceed max row limit: ${maxRowCount}`,
           details: {
             max: maxRowCount,
             maxRowCount,
             rowCount,
+          },
+          localization: {
+            i18nKey: tableDataSafetyLimitErrors.rowsPerTableMax.i18nKey,
+            context: { max: maxRowCount },
           },
         });
       }

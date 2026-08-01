@@ -282,6 +282,9 @@ export class V2ContainerService implements OnApplicationBootstrap, OnModuleDestr
         queryBusMiddlewares,
         computedUpdate,
         tableQueryOps,
+        // This app writes record_trash rows for v2 deletes
+        // (V2RecordTrashService), so the delete-undo purge guard is sound here.
+        undoRedoRestorePurgeGuard: true,
         ...(tableMaxRowLimit
           ? { tableMaxRowLimit }
           : legacyMaxFreeRowLimit
@@ -363,7 +366,11 @@ export class V2ContainerService implements OnApplicationBootstrap, OnModuleDestr
       (allowManualIndexExecution
         ? executablePhase1RemediationKinds
         : searchVectorRuntimeEnabled
-          ? ([
+          ? // Schema-change maintenance enqueues rebuild_search_access_path;
+            // without it here those tasks stay queued forever and search
+            // silently degrades to ILIKE after any field change.
+            ([
+              'rebuild_search_access_path',
               'rebuild_search_vector',
               'manual_investigation',
             ] satisfies ReadonlyArray<ExecutablePhase1RemediationKind>)

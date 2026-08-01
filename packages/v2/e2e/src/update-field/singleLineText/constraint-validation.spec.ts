@@ -73,13 +73,24 @@ describe('update-field: singleLineText constraint validation', () => {
       const duplicateB = await ctx.createRecord(tableId, { [fieldId]: '100' });
       const nullRecord = await ctx.createRecord(tableId, {});
 
-      await expect(
-        ctx.updateField({
-          tableId,
-          fieldId,
-          field: { unique: true },
-        })
-      ).rejects.toThrow('validation.field.unique');
+      const uniqueFailure = await updateFieldRaw(ctx, {
+        tableId,
+        fieldId,
+        field: { unique: true },
+      });
+      expect(uniqueFailure.status).toBe(400);
+      const parsedUniqueFailure = updateFieldErrorResponseSchema.safeParse(uniqueFailure.body);
+      expect(parsedUniqueFailure.success).toBe(true);
+      if (parsedUniqueFailure.success) {
+        expect(parsedUniqueFailure.data.error.code).toBe('validation.field.unique_existing_values');
+        expect(parsedUniqueFailure.data.error.message).toBe(
+          'Cannot mark field "TextField" as unique because existing records contain duplicate values.'
+        );
+        expect(parsedUniqueFailure.data.error.localization).toEqual({
+          i18nKey: 'httpErrors.custom.fieldUniqueExistingValues',
+          context: { fieldName: 'TextField' },
+        });
+      }
 
       await ctx.deleteRecord(tableId, duplicateB.id);
 
@@ -100,7 +111,7 @@ describe('update-field: singleLineText constraint validation', () => {
       const parsedFailure = updateFieldErrorResponseSchema.safeParse(notNullFailure.body);
       expect(parsedFailure.success).toBe(true);
       if (parsedFailure.success) {
-        expect(parsedFailure.data.error.code).toBe('validation.field.not_null');
+        expect(parsedFailure.data.error.code).toBe('validation.field.required_existing_values');
         expect(parsedFailure.data.error.message).toBe(
           'Cannot mark field "TextField" as required because existing records contain empty values.'
         );

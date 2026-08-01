@@ -19,7 +19,7 @@ export const EmailContent = ({
 }: {
   defaultRole: IRole;
   isCreateLoading: boolean;
-  onCreate: (ro: { emails: string[]; role: IBaseRole }) => Promise<void>;
+  onCreate: (ro: { emails: string[]; role: IBaseRole }) => Promise<boolean>;
   onBack: () => void;
   filteredRoleStatic: IRoleStatic[];
   resourceUrl: string;
@@ -56,10 +56,11 @@ export const EmailContent = ({
 
   const sendInvitation = async () => {
     try {
-      await onCreate({
+      const sent = await onCreate({
         emails: inviteEmails,
         role: selectedRole as IBaseRole,
       });
+      if (!sent) return;
       setEmail('');
       setInviteEmails([]);
       setHasSentInvitation(true);

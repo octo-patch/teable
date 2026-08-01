@@ -3,11 +3,14 @@ import {
   TableByBaseIdSpec,
   TableByIdSpec,
   TableByIdsSpec,
+  TableByViewIdSpec,
+  TableWithViewIdsSpec,
   TableByIncomingReferenceToTableSpec,
   TableByNameLikeSpec,
   TableByNameSpec,
   TableId,
   TableName,
+  ViewId,
 } from '@teable/v2-core';
 import { describe, expect, it } from 'vitest';
 
@@ -138,6 +141,44 @@ describe('TableWhereVisitor', () => {
     });
   });
 
+  it('records a child View selector for selective aggregate hydration', () => {
+    const viewId = ViewId.create(`viw${'a'.repeat(16)}`)._unsafeUnwrap();
+
+    for (const state of [
+      'active',
+      'activeWithPending',
+      'activeAnyProvision',
+      'deleted',
+      'all',
+    ] as const) {
+      const visitor = new TableWhereVisitor(state);
+      const result = visitor.visitTableByViewId(TableByViewIdSpec.create(viewId));
+
+      expect(result.isOk()).toBe(true);
+      expect(visitor.describe()).toEqual({
+        specName: 'TableByViewIdSpec',
+        viewId: viewId.toString(),
+      });
+      expect(typeof result._unsafeUnwrap()).toBe('function');
+    }
+  });
+
+  it('records a View child hydration projection without filtering the Table root', () => {
+    const viewIds = [
+      ViewId.create(`viw${'a'.repeat(16)}`)._unsafeUnwrap(),
+      ViewId.create(`viw${'b'.repeat(16)}`)._unsafeUnwrap(),
+    ];
+    const visitor = new TableWhereVisitor('active');
+    const result = visitor.visitTableWithViewIds(TableWithViewIdsSpec.create(viewIds));
+
+    expect(result.isOk()).toBe(true);
+    expect(visitor.describe()).toEqual({
+      specName: 'TableWithViewIdsSpec',
+      viewIds: viewIds.map((viewId) => viewId.toString()),
+    });
+    expect(typeof result._unsafeUnwrap()).toBe('function');
+  });
+
   it('records incoming-reference filters for both active and deleted states', () => {
     const activeVisitor = new TableWhereVisitor('active');
     const deletedVisitor = new TableWhereVisitor('deleted');
@@ -168,6 +209,7 @@ describe('TableWhereVisitor', () => {
     const unsupportedMethods = [
       ['visitTableAddField', 'TableAddFieldSpec is not supported for table filters'],
       ['visitTableAddFields', 'TableAddFieldsSpec is not supported for table filters'],
+      ['visitTableAddView', 'TableAddViewSpec is not supported for table filters'],
       [
         'visitTableAddSelectOptions',
         'TableAddSelectOptionsSpec is not supported for table filters',

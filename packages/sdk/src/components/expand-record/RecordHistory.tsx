@@ -10,12 +10,7 @@ import type {
   IRecordHistoryItemVo,
   IRecordHistoryVo,
 } from '@teable/openapi';
-import {
-  getFields,
-  getRecordHistory,
-  getRecordListHistory,
-  getUserCollaborators,
-} from '@teable/openapi';
+import { getFields, getRecordHistory, getRecordListHistory } from '@teable/openapi';
 import {
   Button,
   Popover,
@@ -31,7 +26,13 @@ import type { ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactQueryKeys } from '../../config';
 import { useTranslation } from '../../context/app/i18n';
-import { useBaseId, useFieldStaticGetter, useFields, useIsHydrated, useTableId } from '../../hooks';
+import {
+  useCollaboratorFilterUsers,
+  useFieldStaticGetter,
+  useFields,
+  useIsHydrated,
+  useTableId,
+} from '../../hooks';
 import { createFieldInstance, type IFieldInstance } from '../../model';
 import { CellValue, UserAvatar } from '../cell-value';
 import { CollaboratorWithHoverCard } from '../collaborator';
@@ -356,7 +357,6 @@ const RecordHistoryFilterBar = (props: IRecordHistoryFilterBarProps) => {
 
 const RecordHistoryContent = (props: IRecordHistoryContentProps) => {
   const { recordId, onRecordClick, tableId, contextFields } = props;
-  const baseId = useBaseId();
   const { t } = useTranslation();
   const isHydrated = useIsHydrated();
   const getFieldStatic = useFieldStaticGetter();
@@ -365,10 +365,13 @@ const RecordHistoryContent = (props: IRecordHistoryContentProps) => {
   const [fieldIds, setFieldIds] = useState<string[]>([]);
   const [createdByIds, setCreatedByIds] = useState<string[]>([]);
   const [dateRange, setDateRange] = useState<IDateRangeValue | null>(null);
-  const [userSearch, setUserSearch] = useState('');
   const [selectedUserMap, setSelectedUserMap] = useState<Record<string, IItemBaseCollaboratorUser>>(
     {}
   );
+  const { users, setUserSearch } = useCollaboratorFilterUsers({
+    selectedIds: createdByIds,
+    userMap: selectedUserMap,
+  });
 
   const shouldFetchFields = contextFields == null;
 
@@ -396,35 +399,6 @@ const RecordHistoryContent = (props: IRecordHistoryContentProps) => {
     }),
     [createdByIds, dateRange?.exactDate, dateRange?.exactDateEnd, fieldIds]
   );
-
-  const { data: collaboratorsData } = useQuery({
-    queryKey: ReactQueryKeys.baseCollaboratorListUser(baseId as string, {
-      includeSystem: true,
-      skip: 0,
-      take: 100,
-      search: userSearch,
-    }),
-    queryFn: ({ queryKey }) =>
-      getUserCollaborators(queryKey[1], queryKey[2]).then((res) => res.data),
-    enabled: Boolean(baseId),
-  });
-
-  const users = useMemo(() => {
-    const userMap = new Map<string, IItemBaseCollaboratorUser>();
-
-    createdByIds.forEach((id) => {
-      const user = selectedUserMap[id];
-      if (user) {
-        userMap.set(id, user);
-      }
-    });
-
-    collaboratorsData?.users.forEach((user) => {
-      userMap.set(user.id, user);
-    });
-
-    return Array.from(userMap.values());
-  }, [collaboratorsData?.users, createdByIds, selectedUserMap]);
 
   const queryFn = async ({
     queryKey,
@@ -678,7 +652,7 @@ const RecordHistoryContent = (props: IRecordHistoryContentProps) => {
     setCreatedByIds([]);
     setDateRange(null);
     setUserSearch('');
-  }, []);
+  }, [setUserSearch]);
 
   if (!isHydrated) return null;
 

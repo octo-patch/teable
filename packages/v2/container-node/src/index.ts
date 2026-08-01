@@ -80,6 +80,13 @@ export interface IV2NodePgContainerOptions {
   commandBusMiddlewares?: ReadonlyArray<ICommandBusMiddleware>;
   queryBusMiddlewares?: ReadonlyArray<IQueryBusMiddleware>;
   computedUpdate?: IV2TableRepositoryPostgresConfig['computedUpdate'];
+  /**
+   * Enable the delete-undo purge guard. Only turn this on when the hosting app
+   * writes record_trash rows for v2 deletes (nestjs V2RecordTrashService);
+   * standalone containers have no trash sink, and with the guard on every
+   * delete-undo would silently restore nothing.
+   */
+  undoRedoRestorePurgeGuard?: boolean;
   tableQueryOps?: RegisterV2TableOpsOptions & {
     ensureSchema?: boolean;
   };
@@ -250,6 +257,12 @@ export const registerV2NodePgDependencies = async (
     });
   }
   c.registerInstance(v2CoreTokens.tableDataSafetyLimits, tableDataSafetyLimits);
+
+  // The delete-undo purge guard is opt-in: pre-register before the core
+  // defaults so registerV2CoreServices keeps the caller's choice.
+  c.registerInstance(v2CoreTokens.undoRedoReplayConfig, {
+    restorePurgeGuard: Boolean(options.undoRedoRestorePurgeGuard),
+  });
 
   // Register core services (uses defaults unless already registered)
   registerV2CoreServices(c, { lifecycle: Lifecycle.Singleton });

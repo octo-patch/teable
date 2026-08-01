@@ -9070,15 +9070,16 @@ describe('v2 computed field updates (e2e)', () => {
       await ctx.testContainer.processOutbox();
 
       const records = await listRecordsWithoutDrain(hostTable.id);
-      expectCellDisplay(records, 0, fieldIds[fieldIds.length - 1], '[true, false]');
+      // v1 contract: unchecked checkboxes are stored as null, so only true survives the lookup
+      expectCellDisplay(records, 0, fieldIds[fieldIds.length - 1], '[true]');
       expect(printTableSnapshot(hostTable.name, fieldNames, records, fieldIds))
         .toMatchInlineSnapshot(`
           "[ConditionalLookup Boolean Host]
-          --------------------------
+          -------------------------
           #  | Name  | Active Flags
-          --------------------------
-          R0 | Host1 | [true, false]
-          --------------------------"
+          -------------------------
+          R0 | Host1 | [true]
+          -------------------------"
         `);
     });
 
@@ -10233,11 +10234,11 @@ describe('v2 computed field updates (e2e)', () => {
       expect(printTableSnapshot(hostTable.name, fieldNames, afterRecords, fieldIds))
         .toMatchInlineSnapshot(`
           "[CL_IF_Host]
-          ------------------------------------------
-          #  | Name  | Flag  | ActiveAmounts | Delta
-          ------------------------------------------
-          R0 | Host1 | false | [5]           | 1
-          ------------------------------------------"
+          -----------------------------------------
+          #  | Name  | Flag | ActiveAmounts | Delta
+          -----------------------------------------
+          R0 | Host1 | -    | [5]           | 1
+          -----------------------------------------"
         `);
     });
   });

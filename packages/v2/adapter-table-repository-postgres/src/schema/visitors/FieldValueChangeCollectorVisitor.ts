@@ -5,9 +5,22 @@ import type {
   ITableSpecVisitor,
   TableAddFieldSpec,
   TableAddFieldsSpec,
+  TableAddViewSpec,
+  TableEnsureViewRowOrderSpec,
+  TableRemoveViewSpec,
+  TableRenameViewSpec,
+  TableUpdateViewDescriptionSpec,
+  TableUpdateViewLockedSpec,
+  TableUpdateViewOrderSpec,
+  TableUpdateViewOptionsSpec,
+  TableUpdateViewShareIdSpec,
+  TableUpdateViewShareMetaSpec,
+  TableUpdateViewShareStateSpec,
   TableAddSelectOptionsSpec,
   TableByBaseIdSpec,
   TableByIdSpec,
+  TableByViewIdSpec,
+  TableWithViewIdsSpec,
   TableByIncomingReferenceToTableSpec,
   TableByIdsSpec,
   TableByNameLikeSpec,
@@ -134,6 +147,36 @@ export class FieldValueChangeCollectorVisitor implements ITableSpecVisitor<void>
     return ok(undefined);
   }
 
+  visitTableAddView(_spec: TableAddViewSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableEnsureViewRowOrder(_spec: TableEnsureViewRowOrderSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableRemoveView(_spec: TableRemoveViewSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableRenameView(_spec: TableRenameViewSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableUpdateViewDescription(
+    _spec: TableUpdateViewDescriptionSpec
+  ): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableUpdateViewLocked(_spec: TableUpdateViewLockedSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableUpdateViewOrder(_spec: TableUpdateViewOrderSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
   visitTableAddSelectOptions(_spec: TableAddSelectOptionsSpec): Result<void, DomainError> {
     return ok(undefined);
   }
@@ -153,6 +196,22 @@ export class FieldValueChangeCollectorVisitor implements ITableSpecVisitor<void>
     return ok(undefined);
   }
 
+  visitTableUpdateViewOptions(_spec: TableUpdateViewOptionsSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableUpdateViewShareMeta(_spec: TableUpdateViewShareMetaSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableUpdateViewShareId(_spec: TableUpdateViewShareIdSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableUpdateViewShareState(_spec: TableUpdateViewShareStateSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
   visitTableUpdateViewQueryDefaults(
     _spec: TableUpdateViewQueryDefaultsSpec
   ): Result<void, DomainError> {
@@ -164,6 +223,14 @@ export class FieldValueChangeCollectorVisitor implements ITableSpecVisitor<void>
   }
 
   visitTableById(_spec: TableByIdSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableByViewId(_spec: TableByViewIdSpec): Result<void, DomainError> {
+    return ok(undefined);
+  }
+
+  visitTableWithViewIds(_spec: TableWithViewIdsSpec): Result<void, DomainError> {
     return ok(undefined);
   }
 

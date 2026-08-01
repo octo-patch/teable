@@ -40,6 +40,7 @@ import { createPortal } from 'react-dom';
 import { useClickAway, useLocalStorage } from 'react-use';
 import { Emoji } from '@/features/app/components/emoji/Emoji';
 import { EmojiPicker } from '@/features/app/components/emoji/EmojiPicker';
+import { collapseChatPanelIfExpanded } from '@/features/app/components/sidebar/useChatPanelStore';
 import { useShareUrlPrefix } from '@/features/app/context/ShareContext';
 import { useBaseResource } from '@/features/app/hooks/useBaseResource';
 import { useDisableAIAction } from '@/features/app/hooks/useDisableAIAction';
@@ -253,6 +254,7 @@ export const BaseNodeTree = (props: IBaseNodeTreeProps) => {
         const viewId = tableViewIdsMap[resourceId];
         const url = tableHrefMap[resourceId];
         if (url) {
+          collapseChatPanelIfExpanded();
           router.push({ pathname: url }, undefined, {
             shallow: !isSharePage && Boolean(viewId),
           });
@@ -267,6 +269,9 @@ export const BaseNodeTree = (props: IBaseNodeTreeProps) => {
         urlPrefix: shareUrlPrefix,
       });
       if (!url) return;
+      // A folder never reaches here (getNodeUrl returns null for it), so this
+      // only fires for node clicks that actually navigate to content
+      collapseChatPanelIfExpanded();
       // Table URLs built here have no view id (hrefMap not ready yet); only a
       // non-shallow navigation runs getServerSideProps, which redirects to the
       // last-visited/default view. A shallow push would strand the page on a
@@ -591,7 +596,9 @@ export const BaseNodeTree = (props: IBaseNodeTreeProps) => {
         {resourceType === BaseNodeResourceType.Table && (
           <EmojiPicker
             className="flex size-full items-center justify-center hover:bg-muted-foreground/60"
+            icon={icon}
             onChange={(icon: string) => curdHooks.updateNode(nodeId, { icon })}
+            onRemove={() => curdHooks.updateNode(nodeId, { icon: null })}
             disabled={!canUpdateTable}
           >
             {icon ? <Emoji emoji={icon} size="1rem" /> : <IconComponent className="size-full" />}

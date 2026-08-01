@@ -59,15 +59,21 @@ describe('buildTableSearchAccessPathDefinition', () => {
       accessPath: 'generated_text',
       indexKind: 'gin_trgm',
       fields: [
-        { fieldId: 'fld0000000000000001', fieldDbName: 'order_no' },
-        { fieldId: 'fld0000000000000002', fieldDbName: 'notes' },
+        {
+          fieldId: 'fld0000000000000001',
+          fieldDbName: 'order_no',
+          textProjection: { kind: 'plain' },
+        },
+        {
+          fieldId: 'fld0000000000000002',
+          fieldDbName: 'notes',
+          textProjection: { kind: 'multiline' },
+        },
       ],
-      skippedFields: [
-        { fieldId: 'fld0000000000000003', skippedReason: 'unsupported_search_field_type' },
-      ],
+      skippedFields: [{ fieldId: 'fld0000000000000003', skippedReason: 'non_text_value' }],
     });
     expect(definition.definitionKey).toBe(
-      'tbl0000000000000001:substring:pg_trgm:none:fld0000000000000001=order_no,fld0000000000000002=notes'
+      'tbl0000000000000001:substring:pg_trgm:none:fld0000000000000001=order_no:plain,fld0000000000000002=notes:multiline'
     );
   });
 

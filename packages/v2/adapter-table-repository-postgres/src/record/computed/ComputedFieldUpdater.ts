@@ -4,6 +4,7 @@ import {
 } from '@teable/v2-adapter-db-postgres-shared';
 import {
   domainError,
+  tableDataSafetyLimitErrors,
   FieldType,
   FieldCondition,
   LinkRelationship,
@@ -76,6 +77,7 @@ const BEFORE_IMAGE_TABLE = 'pg_temp.tmp_computed_before_image';
 const BEFORE_IMAGE_SNAPSHOT_COL = 'field_values';
 const SAME_TABLE_BATCH_CHUNK_TRIGGER = 1000;
 const SAME_TABLE_BATCH_CHUNK_SIZE = 500;
+const JSON_SAME_TABLE_BATCH_CHUNK_SIZE = 25;
 const COMPUTED_UPDATE_FIELD_CHUNK_SIZE = 16;
 const DISTINCT_HOST_KEY_UNCHUNK_MAX_DIRTY_RECORDS = 50_000;
 const DISTINCT_HOST_KEY_UNCHUNK_MAX_KEYS = 5_000;
@@ -1128,40 +1130,41 @@ export class ComputedFieldUpdater {
           // Formula-only same-table steps use a CTE chain so formula dependencies are computed
           // once and later formulas read CTE columns instead of recursively inlining expressions.
           if (formulaOnlyFieldLevelsResult.value.length > 0 && !shouldChunkFields) {
-            const hasJsonTargets = await this.hasJsonTargetColumns(db, tableName, table, fieldIds);
-            if (hasJsonTargets) {
-              stepSpan?.setAttribute('step.sameTableCollapsedSkipped', true);
-              stepSpan?.setAttribute('step.sameTableCollapsedSkipReason', 'json_target_column');
+            const batchBuilder = new SameTableBatchQueryBuilder(db, this.typeValidationStrategy);
+            const chunkedRecordIds = this.hasJsonBackedFormulaTarget(
+              table,
+              formulaOnlyFieldLevelsResult.value
+            )
+              ? await this.getDirtyRecordIdChunks(
+                  db,
+                  step.tableId,
+                  JSON_SAME_TABLE_BATCH_CHUNK_SIZE,
+                  true
+                )
+              : dirtyCount > SAME_TABLE_BATCH_CHUNK_TRIGGER
+                ? await this.getDirtyRecordIdChunks(db, step.tableId)
+                : [];
+            const effectiveChunks = chunkedRecordIds.length > 0 ? chunkedRecordIds : [undefined];
+
+            stepSpan?.setAttribute('step.sameTableChunkCount', effectiveChunks.length);
+            stepSpan?.setAttribute('step.sameTableChunked', effectiveChunks.length > 1);
+
+            const batchQueryPlans: ComputedUpdateQueryPlan[] = [];
+            for (const recordIds of effectiveChunks) {
+              const batchResult = yield* batchBuilder.build({
+                table,
+                fieldLevels: formulaOnlyFieldLevelsResult.value,
+                ...(recordIds ? { recordIds } : {}),
+                dirtyFilter: {
+                  tableId: step.tableId.toString(),
+                  dirtyTableName: DIRTY_TABLE,
+                  tableIdColumn: DIRTY_TABLE_ID_COL,
+                  recordIdColumn: DIRTY_RECORD_ID_COL,
+                },
+              });
+              batchQueryPlans.push({ selectQuery: batchResult.selectQuery, fieldIds });
             }
-
-            if (!hasJsonTargets) {
-              const batchBuilder = new SameTableBatchQueryBuilder(db, this.typeValidationStrategy);
-              const chunkedRecordIds =
-                dirtyCount > SAME_TABLE_BATCH_CHUNK_TRIGGER
-                  ? await this.getDirtyRecordIdChunks(db, step.tableId)
-                  : [];
-              const effectiveChunks = chunkedRecordIds.length > 1 ? chunkedRecordIds : [undefined];
-
-              stepSpan?.setAttribute('step.sameTableChunkCount', effectiveChunks.length);
-              stepSpan?.setAttribute('step.sameTableChunked', effectiveChunks.length > 1);
-
-              const batchQueryPlans: ComputedUpdateQueryPlan[] = [];
-              for (const recordIds of effectiveChunks) {
-                const batchResult = yield* batchBuilder.build({
-                  table,
-                  fieldLevels: formulaOnlyFieldLevelsResult.value,
-                  ...(recordIds ? { recordIds } : {}),
-                  dirtyFilter: {
-                    tableId: step.tableId.toString(),
-                    dirtyTableName: DIRTY_TABLE,
-                    tableIdColumn: DIRTY_TABLE_ID_COL,
-                    recordIdColumn: DIRTY_RECORD_ID_COL,
-                  },
-                });
-                batchQueryPlans.push({ selectQuery: batchResult.selectQuery, fieldIds });
-              }
-              queryPlans = batchQueryPlans;
-            }
+            queryPlans = batchQueryPlans;
           }
 
           const fieldChunks = shouldChunkFields
@@ -1603,7 +1606,7 @@ export class ComputedFieldUpdater {
         if (bytes > limits.computed.maxComputedCellValueBytes) {
           return err(
             domainError.validation({
-              code: 'validation.limit.computed_cell_value_max_bytes',
+              code: tableDataSafetyLimitErrors.computedCellValueMaxBytes.code,
               message:
                 'Table data safety limit exceeded: validation.limit.computed_cell_value_max_bytes',
               details: {
@@ -1612,6 +1615,10 @@ export class ComputedFieldUpdater {
                 fieldId: change.fieldId,
                 attempted: bytes,
                 max: limits.computed.maxComputedCellValueBytes,
+              },
+              localization: {
+                i18nKey: tableDataSafetyLimitErrors.computedCellValueMaxBytes.i18nKey,
+                context: { max: limits.computed.maxComputedCellValueBytes },
               },
             })
           );
@@ -1678,55 +1685,36 @@ export class ComputedFieldUpdater {
     }
   }
 
-  private async hasJsonTargetColumns(
-    db: Kysely<DynamicDB>,
-    tableName: string,
+  private hasJsonBackedFormulaTarget(
     table: Table,
-    fieldIds: ReadonlyArray<FieldId>
-  ): Promise<boolean> {
-    try {
-      const tableNameParts = tableName.split('.');
-      if (tableNameParts.length !== 2) return false;
-      const [schemaName, physicalTableName] = tableNameParts;
-
-      const columnNames: string[] = [];
-      for (const fieldId of fieldIds) {
-        const fieldResult = table.getField((f) => f.id().equals(fieldId));
-        if (fieldResult.isErr()) continue;
-        const dbFieldNameResult = fieldResult.value.dbFieldName().andThen((n) => n.value());
-        if (dbFieldNameResult.isErr()) continue;
-        columnNames.push(dbFieldNameResult.value);
-      }
-
-      if (columnNames.length === 0) return false;
-
-      const columns = await db
-        .selectFrom('information_schema.columns')
-        .select(['column_name', 'data_type', 'udt_name'])
-        .where('table_schema', '=', schemaName)
-        .where('table_name', '=', physicalTableName)
-        .where('column_name', 'in', columnNames)
-        .execute();
-
-      return columns.some((column) => {
-        const dataType = String(column.data_type).toLowerCase();
-        const udtName = String(column.udt_name).toLowerCase();
-        return (
-          dataType === 'json' || dataType === 'jsonb' || udtName === 'json' || udtName === 'jsonb'
-        );
-      });
-    } catch {
-      return false;
-    }
+    fieldLevels: ReadonlyArray<SameTableFieldLevel>
+  ): boolean {
+    return fieldLevels.some((level) =>
+      level.fieldIds.some((fieldId) => {
+        const fieldResult = table.getField((field) => field.id().equals(fieldId));
+        if (fieldResult.isErr()) return false;
+        return fieldResult.value
+          .dbFieldType()
+          .andThen((type) => type.value())
+          .map((type) => {
+            const normalized = type.trim().toUpperCase();
+            return normalized === 'JSON' || normalized === 'JSONB';
+          })
+          .unwrapOr(false);
+      })
+    );
   }
 
   private async getDirtyRecordIdChunks(
     db: Kysely<DynamicDB>,
-    tableId: TableId
+    tableId: TableId,
+    chunkSize = SAME_TABLE_BATCH_CHUNK_SIZE,
+    includeSingleton = false
   ): Promise<ReadonlyArray<ReadonlyArray<string>>> {
     const recordIds = await this.getDirtyRecordIdsForTable(db, tableId);
     if (recordIds.length === 0) return [];
-    return splitIntoChunks(recordIds, SAME_TABLE_BATCH_CHUNK_SIZE);
+    if (!includeSingleton && recordIds.length <= chunkSize) return [recordIds];
+    return splitIntoChunks(recordIds, chunkSize);
   }
 
   private async getDirtyRecordIdsForTable(

@@ -13,6 +13,7 @@ import type {
   IComputedOutboxMaintenanceTarget,
 } from '../../../global/data-db-client-manager.service';
 import { DataDbClientManager } from '../../../global/data-db-client-manager.service';
+import { mapWithConcurrency } from '../../../utils/map-with-concurrency';
 import { ComputedOutboxTriggerMetrics } from './computed-outbox-trigger.metrics';
 import {
   computedOutboxWakeupWireSchema,
@@ -24,7 +25,6 @@ import {
   COMPUTED_OUTBOX_RECENT_FAILED_LIMIT,
   COMPUTED_OUTBOX_WAKEUP_QUEUE,
 } from './constants';
-import { mapWithConcurrency } from './map-with-concurrency';
 
 type Storage = 'default' | 'byodb';
 type HealthStatus = 'healthy' | 'degraded' | 'critical';

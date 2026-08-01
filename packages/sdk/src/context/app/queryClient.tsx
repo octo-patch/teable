@@ -35,48 +35,6 @@ export function toCamelCaseErrorCode(errorCode: string): string {
     .join('');
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null;
-
-const getValidationLimitMessage = (
-  data: ICustomHttpExceptionData | undefined,
-  t: ILocaleFunction,
-  prefix?: string
-) => {
-  const domainCode = data?.domainCode;
-  if (typeof domainCode !== 'string' || !domainCode.startsWith('validation.limit.')) {
-    return;
-  }
-
-  const limitKey = toCamelCaseErrorCode(domainCode.slice('validation.limit.'.length));
-  const key = `httpErrors.limit.${limitKey}`;
-  const prefixedKey = prefix ? `${prefix}:${key}` : key;
-  const details = isRecord(data?.details) ? data.details : {};
-  const message = t(prefixedKey as TKey, details);
-  return typeof message === 'string' && message !== prefixedKey && message !== key
-    ? message
-    : undefined;
-};
-
-const getDomainCodeMessage = (
-  data: ICustomHttpExceptionData | undefined,
-  t: ILocaleFunction,
-  prefix?: string
-) => {
-  const domainCode = data?.domainCode;
-  if (typeof domainCode !== 'string') {
-    return;
-  }
-
-  const key = `httpErrors.${domainCode}`;
-  const prefixedKey = prefix ? `${prefix}:${key}` : key;
-  const details = isRecord(data?.details) ? data.details : {};
-  const message = t(prefixedKey as TKey, details);
-  return typeof message === 'string' && message !== prefixedKey && message !== key
-    ? message
-    : undefined;
-};
-
 export const getLocalizationMessage = (
   localization: ILocalization,
   t: ILocaleFunction,
@@ -89,17 +47,8 @@ export const getLocalizationMessage = (
 
 export const getHttpErrorMessage = (error: unknown, t: ILocaleFunction, prefix?: string) => {
   const { message, data } = error as IHttpError;
-  const customData = (data as ICustomHttpExceptionData) || {};
-  const limitMessage = getValidationLimitMessage(customData, t, prefix);
-  if (limitMessage) return limitMessage;
-
-  const { localization } = customData;
-  if (localization) return getLocalizationMessage(localization, t, prefix);
-
-  const domainCodeMessage = getDomainCodeMessage(customData, t, prefix);
-  if (domainCodeMessage) return domainCodeMessage;
-
-  return message;
+  const { localization } = (data as ICustomHttpExceptionData) || {};
+  return localization ? getLocalizationMessage(localization, t, prefix) : message;
 };
 
 const handleNetworkError = (t?: ILocaleFunction): boolean => {
@@ -135,13 +84,19 @@ const dedupeValidationError = (message: string): boolean => {
   return false;
 };
 
-const handleStatusRedirect = (status: number): boolean => {
+const handleStatusRedirect = (status: number, code?: string): boolean => {
   if (status === 401) {
     window.location.href = `/auth/login?redirect=${encodeURIComponent(window.location.href)}`;
     return true;
   }
   if (status === 402) {
-    useUsageLimitModalStore.setState({ modalType: UsageLimitModalType.Upgrade, modalOpen: true });
+    // Credit exhaustion opens the purchase-credits modal; other 402s (plan
+    // limits, PAYMENT_REQUIRED) keep the plan-upgrade modal.
+    const modalType =
+      code === HttpErrorCode.CREDIT_LIMIT_EXCEEDED
+        ? UsageLimitModalType.CreditInsufficient
+        : UsageLimitModalType.Upgrade;
+    useUsageLimitModalStore.setState({ modalType, modalOpen: true });
     return true;
   }
   if (status === 460) {
@@ -167,7 +122,7 @@ export const errorRequestHandler = (
     return;
   }
 
-  if (handleStatusRedirect(status)) {
+  if (handleStatusRedirect(status, code)) {
     return;
   }
 

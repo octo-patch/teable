@@ -18,7 +18,7 @@ const dateValueSchema = z
   .object({
     mode: recordConditionDateModeSchema,
     numberOfDays: z.coerce.number().int().nonnegative().optional(),
-    exactDate: z.string().datetime({ precision: 3, offset: true }).optional(),
+    exactDate: z.string().datetime({ offset: true }).optional(),
     timeZone: z.string(),
   })
   .superRefine((val, ctx) => {

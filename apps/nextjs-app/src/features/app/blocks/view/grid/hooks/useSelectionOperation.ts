@@ -28,6 +28,9 @@ import type {
   ITemporaryPasteVo,
 } from '@teable/openapi';
 import {
+  archiveRecords as archiveRecordsApi,
+  archiveRecordsStream,
+  MAX_ARCHIVE_RECORDS_PER_REQUEST,
   clearById,
   clearSelectionByIdStream,
   copy,
@@ -58,6 +61,7 @@ import {
   SelectionRegionType,
   useRowCount,
 } from '@teable/sdk';
+import { UsageLimitModalType, useUsageLimitModalStore } from '@teable/sdk/components/billing/store';
 import { useConfirm } from '@teable/ui-lib/base';
 import { toast } from '@teable/ui-lib/shadcn/ui/sonner';
 import type { AxiosResponse } from 'axios';
@@ -90,6 +94,7 @@ import { useSyncSelectionStore } from './useSelectionStore';
 
 const clearToastId = 'clearToastId';
 const deleteToastId = 'deleteToastId';
+const archiveToastId = 'archiveToastId';
 const getPasteContentColumnCount = (content: IPasteByIdRo['content']) => {
   if (Array.isArray(content)) {
     return content.reduce((max, row) => Math.max(max, row.length), 0);
@@ -1585,6 +1590,61 @@ export const useSelectionOperation = (props?: {
     [buildSelectionIdRequest, deleteReq, openDeleteConfirmationDialog, rowCount, tableId, t, viewId]
   );
 
+  const doArchive = useCallback(
+    async (selection: CombinedSelection, recordMap?: IRecordIndexMap) => {
+      if (!viewId || !tableId) return;
+      try {
+        // The archive API takes explicit record ids, so resolve the selection without
+        // query-scope shortcuts (allRecords / exclusions).
+        const archiveRo = (await buildSelectionIdRequest(selection, recordMap ?? {}, {
+          includeFieldSelection: false,
+          allowQueryScope: false,
+        })) as { selection?: { recordIds?: string[] } };
+        const recordIds = archiveRo.selection?.recordIds;
+        if (!recordIds?.length) return;
+
+        const toastId = toast.loading(t('table:table.actionTips.archiving'), {
+          id: archiveToastId,
+        });
+        if (recordIds.length <= MAX_ARCHIVE_RECORDS_PER_REQUEST) {
+          await archiveRecordsApi(tableId, { recordIds });
+        } else {
+          await archiveRecordsStream(
+            tableId,
+            { recordIds },
+            {
+              headers: {
+                'X-Window-Id': ensureUndoRedoWindowIdHeader(),
+              },
+              onProgress: (event) => {
+                toast.loading(
+                  `${t('table:table.actionTips.archiving')} ${event.archivedCount}/${event.totalCount}`,
+                  { id: toastId }
+                );
+              },
+            }
+          );
+        }
+        toast.success(t('table:table.actionTips.archiveSuccessful'), { id: toastId });
+      } catch (error) {
+        if ((error as HttpError).status === 402) {
+          toast.dismiss(archiveToastId);
+          useUsageLimitModalStore.setState({
+            modalType: UsageLimitModalType.Upgrade,
+            modalOpen: true,
+          });
+          return;
+        }
+        const description =
+          getHttpErrorMessage(error as HttpError, t, 'sdk') ||
+          (error instanceof Error ? error.message : 'Unknown error');
+        toast.error(description, { id: archiveToastId });
+        console.error('Archive error: ', error);
+      }
+    },
+    [buildSelectionIdRequest, tableId, t, viewId]
+  );
+
   const doDuplicate = useCallback(
     async (selection: CombinedSelection) => {
       if (!viewId || !tableId) return;
@@ -1677,6 +1737,7 @@ export const useSelectionOperation = (props?: {
     paste: doPaste,
     clear: doClear,
     deleteRecords: doDelete,
+    archiveRecords: doArchive,
     duplicateRecords: doDuplicate,
     clearProgress,
     clearSummary,

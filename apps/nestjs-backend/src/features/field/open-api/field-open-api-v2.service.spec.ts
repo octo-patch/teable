@@ -24,6 +24,18 @@ vi.mock('@teable/v2-contract-http-implementation/handlers', () => ({
   executeUpdateRecordEndpoint,
 }));
 
+vi.mock('@teable/v2-contract-http', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@teable/v2-contract-http')>();
+  return {
+    ...original,
+    mapFieldToDto: (field: unknown, primaryFieldId?: unknown) => {
+      const testDto = (field as { __testDto?: Record<string, unknown> }).__testDto;
+      if (testDto) return { isErr: () => false, value: testDto };
+      return original.mapFieldToDto(field as never, primaryFieldId as never);
+    },
+  };
+});
+
 import { FieldOpenApiV2Service } from './field-open-api-v2.service';
 
 type ITestFieldOpenApiV2Service = {
@@ -222,25 +234,24 @@ describe('FieldOpenApiV2Service updateField', () => {
       body: { ok: true },
     });
     const commandBus = {};
-    const tableQueryService = {
-      getById: vi.fn().mockResolvedValue({
-        isErr: () => false,
-        value: {},
-      }),
+    const domainField = {
+      id: () => ({ toString: () => fieldId }),
+      __testDto: fieldDto,
     };
-    const tableMapper = {
-      toDTO: vi.fn().mockReturnValue({
+    const queryBus = {
+      execute: vi.fn().mockResolvedValue({
         isErr: () => false,
         value: {
-          fields: [fieldDto],
+          fields: [domainField],
+          primaryFieldId: undefined,
+          view: undefined,
         },
       }),
     };
     const container = {
       resolve: vi.fn((token: symbol) => {
         if (token === v2CoreTokens.commandBus) return commandBus;
-        if (token === v2CoreTokens.tableQueryService) return tableQueryService;
-        if (token === v2CoreTokens.tableMapper) return tableMapper;
+        if (token === v2CoreTokens.queryBus) return queryBus;
         throw new Error(`Unexpected token ${String(token)}`);
       }),
     };
@@ -1750,39 +1761,61 @@ describe('FieldOpenApiV2Service normalizeFieldVo', () => {
     expect(vo.options).toEqual({});
   });
 
-  it('extracts field vo directly from returned table dto and preserves lookup link metadata', async () => {
-    const service = createNormalizeService();
-    const vo = await service.extractFieldVoFromTableDto(
+  it('reads a field through the v2 field list and preserves lookup link metadata', async () => {
+    const fieldDtos = [
       {
-        fields: [
-          {
-            id: 'fldLink000000000001',
-            name: 'Link',
-            type: 'link',
-            options: {
-              relationship: 'manyMany',
-              foreignTableId: 'tblForeign00000001',
-              fkHostTableName: 'bseBase.tblJunction',
-              selfKeyName: '__fk_self',
-              foreignKeyName: '__fk_foreign',
-            },
-          },
-          {
-            id: 'fldLookup000000001',
-            name: 'Lookup',
-            type: 'singleLineText',
-            isLookup: true,
-            lookupOptions: {
-              linkFieldId: 'fldLink000000000001',
-              foreignTableId: 'tblForeign00000001',
-              lookupFieldId: 'fldSource000000001',
-            },
-            options: null,
-          },
-        ],
+        id: 'fldLink000000000001',
+        name: 'Link',
+        type: 'link',
+        options: {
+          relationship: 'manyMany',
+          foreignTableId: 'tblForeign00000001',
+          fkHostTableName: 'bseBase.tblJunction',
+          selfKeyName: '__fk_self',
+          foreignKeyName: '__fk_foreign',
+        },
       },
-      'fldLookup000000001'
-    );
+      {
+        id: 'fldLookup000000001',
+        name: 'Lookup',
+        type: 'singleLineText',
+        isLookup: true,
+        lookupOptions: {
+          linkFieldId: 'fldLink000000000001',
+          foreignTableId: 'tblForeign00000001',
+          lookupFieldId: 'fldSource000000001',
+        },
+        options: null,
+      },
+    ];
+    const queryBus = {
+      execute: vi.fn().mockResolvedValue({
+        isErr: () => false,
+        value: {
+          fields: fieldDtos.map((dto) => ({
+            id: () => ({ toString: () => dto.id }),
+            __testDto: dto,
+          })),
+          primaryFieldId: undefined,
+          view: undefined,
+        },
+      }),
+    };
+    const container = { resolve: vi.fn(() => queryBus) };
+    const service = new FieldOpenApiV2Service(
+      { getContainerForTable: vi.fn().mockResolvedValue(container) } as never,
+      { createContext: vi.fn().mockResolvedValue({}) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      createFieldSupplementService() as never,
+      {} as never
+    ) as unknown as ITestFieldOpenApiV2Service;
+    const vo = await (
+      service as unknown as {
+        getFieldFromV2: (tableId: string, fieldId: string) => Promise<IFieldVo>;
+      }
+    ).getFieldFromV2('tbl3sYKYH4tDz0IEg91', 'fldLookup000000001');
 
     expect(vo.lookupOptions).toMatchObject({
       linkFieldId: 'fldLink000000000001',
@@ -1837,11 +1870,6 @@ describe('FieldOpenApiV2Service createField', () => {
         name: 'Created Field',
         type: 'singleLineText',
       } as IFieldVo);
-    const extractFieldVoFromTableDto = vi.spyOn(
-      service as object,
-      'extractFieldVoFromTableDto' as never
-    );
-
     const createdField = await service.createField('tbl3sYKYH4tDz0IEg91', {
       type: 'singleLineText',
       name: 'Created Field',
@@ -1858,7 +1886,6 @@ describe('FieldOpenApiV2Service createField', () => {
       expect.stringMatching(/^fld/),
       { requestId: 'reqTestId' }
     );
-    expect(extractFieldVoFromTableDto).not.toHaveBeenCalled();
   });
 
   it('falls back to v2 field read for lookup fields to preserve legacy response shape', async () => {

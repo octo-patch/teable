@@ -4,13 +4,19 @@ import type { Result } from 'neverthrow';
 
 import { ApplyFieldSnapshotCommand } from '../../commands/ApplyFieldSnapshotCommand';
 import { ApplyRecordOrdersCommand } from '../../commands/ApplyRecordOrdersCommand';
+import { ApplyViewSnapshotCommand } from '../../commands/ApplyViewSnapshotCommand';
 import { DeleteFieldCommand } from '../../commands/DeleteFieldCommand';
 import { DeleteRecordsCommand } from '../../commands/DeleteRecordsCommand';
+import { DeleteViewCommand } from '../../commands/DeleteViewCommand';
+import { DisableViewShareCommand } from '../../commands/DisableViewShareCommand';
+import { EnableViewShareCommand } from '../../commands/EnableViewShareCommand';
 import { ReplayFieldTypeConversionCommand } from '../../commands/ReplayFieldTypeConversionCommand';
 import { RestoreRecordsCommand } from '../../commands/RestoreRecordsCommand';
+import { SetButtonValueCommand } from '../../commands/SetButtonValueCommand';
 import { UpdateRecordCommand } from '../../commands/UpdateRecordCommand';
 import { UpdateRecordsCommand } from '../../commands/UpdateRecordsCommand';
 import { domainError, type DomainError } from '../../domain/shared/DomainError';
+import { RECORD_REMOVAL_REASON } from '../../domain/table/events/RecordsDeleted';
 import { FieldKeyType } from '../../domain/table/fields/FieldKeyType';
 import type { RecordId } from '../../domain/table/records/RecordId';
 import { TableId } from '../../domain/table/TableId';
@@ -31,8 +37,10 @@ import {
   isSupportedUndoRedoCommandVersion,
   type IUndoRedoStore,
   type UndoEntry,
+  type UndoRedoArchiveTrashRow,
   type UndoRedoCommandData,
   type UndoRedoCommandLeafData,
+  type UndoRedoSetButtonValueCommandData,
   type UndoRedoUpdateCommandData,
   type UndoRedoUpdateRecordsCommandData,
   type UndoScope,
@@ -65,6 +73,13 @@ export type RecordSnapshotUndoRedoInput = {
   readonly redoCommandsBefore?: ReadonlyArray<UndoRedoCommandLeafData>;
 };
 
+export type ButtonValueSnapshotUndoRedoInput = {
+  readonly tableId: TableId;
+  readonly recordId: RecordId;
+  readonly fieldId: string;
+  readonly snapshot: RecordUpdateSnapshot;
+};
+
 export type RecordDeleteUndoRedoInput = {
   readonly tableId: TableId;
   readonly deletedRecords: ReadonlyArray<RecordStoredSnapshot>;
@@ -72,6 +87,14 @@ export type RecordDeleteUndoRedoInput = {
   readonly groupId?: string;
   readonly undoCommandsAfter?: ReadonlyArray<UndoRedoCommandLeafData>;
   readonly redoCommandsBefore?: ReadonlyArray<UndoRedoCommandLeafData>;
+};
+
+export type RecordArchiveUndoRedoInput = {
+  readonly tableId: TableId;
+  readonly archivedRecords: ReadonlyArray<RecordStoredSnapshot>;
+  readonly recordIds: ReadonlyArray<string>;
+  readonly archiveRows: ReadonlyArray<UndoRedoArchiveTrashRow>;
+  readonly groupId?: string;
 };
 
 export type RecordCreateUndoRedoInput = {
@@ -180,13 +203,37 @@ const describeError = (error: unknown): string => {
  * those snapshots, translates them into stack entries, persists them into the
  * stack store, and replays stored commands back through the command bus.
  */
+/**
+ * Replay behavior knobs for undo/redo command reconstruction.
+ *
+ * restorePurgeGuard: when replaying a delete-undo as RestoreRecords, require a
+ * surviving record_trash row (reason 'deleted') per record so a replay cannot
+ * resurrect records the user purged from the recycle bin. The trash rows are
+ * written by the app layer (nestjs V2RecordTrashService), not by the v2 delete
+ * command itself — deployments without that sink (standalone v2 containers:
+ * e2e, devtools) must keep the guard off or every delete-undo silently
+ * restores nothing. Purging is only possible where the sink exists, so the
+ * guard is exactly as available as the risk it defends against. The archived
+ * variant is not gated: archive snapshots are written inside the v2 delete
+ * transaction itself.
+ */
+export interface IUndoRedoReplayConfig {
+  readonly restorePurgeGuard: boolean;
+}
+
+export const defaultUndoRedoReplayConfig: IUndoRedoReplayConfig = {
+  restorePurgeGuard: false,
+};
+
 @injectable()
 export class UndoRedoStackService {
   constructor(
     @inject(v2CoreTokens.undoRedoStore)
     private readonly undoRedoStore: IUndoRedoStore,
     @inject(v2CoreTokens.commandBus)
-    private readonly commandBus: CommandBusPort.ICommandBus
+    private readonly commandBus: CommandBusPort.ICommandBus,
+    @inject(v2CoreTokens.undoRedoReplayConfig)
+    private readonly replayConfig: IUndoRedoReplayConfig = defaultUndoRedoReplayConfig
   ) {}
 
   @TraceSpan({
@@ -278,6 +325,66 @@ export class UndoRedoStackService {
 
   @TraceSpan({
     component: 'service',
+    attributes: (_context, params: ButtonValueSnapshotUndoRedoInput) => ({
+      [TeableSpanAttributes.TABLE_ID]: params.tableId.toString(),
+      [TeableSpanAttributes.RECORD_ID]: params.recordId.toString(),
+      [TeableSpanAttributes.FIELD_ID]: params.fieldId,
+      'teable.undo_redo.mode': 'button_value_update_snapshot',
+    }),
+  })
+  async appendButtonValueUpdateFromSnapshot(
+    context: UndoRedoStackAppendContext,
+    params: ButtonValueSnapshotUndoRedoInput
+  ): Promise<Result<void, DomainError>> {
+    const normalizeValue = (
+      value: unknown
+    ): Result<{ readonly count: number } | null, DomainError> => {
+      if (value == null) return ok(null);
+      if (
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        typeof (value as { count?: unknown }).count !== 'number' ||
+        !Number.isInteger((value as { count: number }).count) ||
+        (value as { count: number }).count < 0
+      ) {
+        return err(
+          domainError.validation({
+            code: 'button.undo_value_invalid',
+            message: `Invalid Button value captured for undo/redo: ${params.fieldId}`,
+          })
+        );
+      }
+      return ok({ count: (value as { count: number }).count });
+    };
+
+    const oldValue = normalizeValue(params.snapshot.previous.fields[params.fieldId]);
+    if (oldValue.isErr()) return err(oldValue.error);
+    const newValue = normalizeValue(params.snapshot.current.fields[params.fieldId]);
+    if (newValue.isErr()) return err(newValue.error);
+
+    const basePayload = {
+      tableId: params.tableId.toString(),
+      recordId: params.recordId.toString(),
+      fieldId: params.fieldId,
+    } as const;
+    const undoCommand: UndoRedoSetButtonValueCommandData = buildUndoRedoCommand('SetButtonValue', {
+      ...basePayload,
+      value: oldValue.value,
+    });
+    const redoCommand: UndoRedoSetButtonValueCommandData = buildUndoRedoCommand('SetButtonValue', {
+      ...basePayload,
+      value: newValue.value,
+    });
+    return this.appendEntry(context, params.tableId, {
+      undoCommand,
+      redoCommand,
+      recordVersionBefore: params.snapshot.oldVersion,
+      recordVersionAfter: params.snapshot.newVersion,
+    });
+  }
+
+  @TraceSpan({
+    component: 'service',
     attributes: (_context, params: RecordDeleteUndoRedoInput) => ({
       [TeableSpanAttributes.TABLE_ID]: params.tableId.toString(),
       'teable.undo_redo.mode': 'record_delete',
@@ -309,6 +416,36 @@ export class UndoRedoStackService {
             params.deletedRecordIds ?? params.deletedRecords.map((snapshot) => snapshot.recordId),
         }),
       ]),
+    });
+  }
+
+  @TraceSpan({
+    component: 'service',
+    attributes: (_context, params: RecordArchiveUndoRedoInput) => ({
+      [TeableSpanAttributes.TABLE_ID]: params.tableId.toString(),
+      'teable.undo_redo.mode': 'record_archive',
+      'teable.undo_redo.record_count': params.archivedRecords.length,
+    }),
+  })
+  async appendRecordArchive(
+    context: UndoRedoStackAppendContext,
+    params: RecordArchiveUndoRedoInput
+  ): Promise<Result<void, DomainError>> {
+    if (!params.archivedRecords.length) {
+      return ok(undefined);
+    }
+
+    return this.appendEntry(context, params.tableId, {
+      ...(params.groupId ? { groupId: params.groupId } : {}),
+      undoCommand: buildUndoRedoCommand('RestoreArchivedRecords', {
+        tableId: params.tableId.toString(),
+        records: params.archivedRecords.map((snapshot) => toUndoRedoRestoreRecord(snapshot)),
+      }),
+      redoCommand: buildUndoRedoCommand('ArchiveRecords', {
+        tableId: params.tableId.toString(),
+        recordIds: params.recordIds,
+        archiveRows: params.archiveRows,
+      }),
     });
   }
 
@@ -489,6 +626,9 @@ export class UndoRedoStackService {
       case 'UpdateRecord': {
         return UpdateRecordCommand.create(commandData.payload);
       }
+      case 'SetButtonValue': {
+        return SetButtonValueCommand.create(commandData.payload);
+      }
       case 'UpdateRecords': {
         return UpdateRecordsCommand.create(commandData.payload);
       }
@@ -496,7 +636,32 @@ export class UndoRedoStackService {
         return DeleteRecordsCommand.create(commandData.payload);
       }
       case 'RestoreRecords': {
-        return RestoreRecordsCommand.create(commandData.payload);
+        // requireTrashRowReason: the entry embeds full snapshots; a replay after the
+        // user emptied the recycle bin must not resurrect the purged records. Only
+        // deployments whose app layer writes the trash rows enable this — see
+        // IUndoRedoReplayConfig.restorePurgeGuard.
+        return RestoreRecordsCommand.create(
+          commandData.payload,
+          this.replayConfig.restorePurgeGuard
+            ? { requireTrashRowReason: RECORD_REMOVAL_REASON.Deleted }
+            : {}
+        );
+      }
+      case 'RestoreArchivedRecords': {
+        // The kept attachment reference rows must go before the insert rebuilds them,
+        // and the restore's trash cleanup removes the archive snapshot rows.
+        // requireTrashRowReason: same purge guard as RestoreRecords, against the
+        // archived snapshot rows (permanently deleted archive items stay deleted).
+        return RestoreRecordsCommand.create(commandData.payload, {
+          cleanupAttachmentRefs: true,
+          requireTrashRowReason: RECORD_REMOVAL_REASON.Archived,
+        });
+      }
+      case 'ArchiveRecords': {
+        return DeleteRecordsCommand.create(
+          { tableId: commandData.payload.tableId, recordIds: commandData.payload.recordIds },
+          { removalReason: 'archived', archiveRows: commandData.payload.archiveRows }
+        );
       }
       case 'ApplyRecordOrders': {
         return ApplyRecordOrdersCommand.create(commandData.payload);
@@ -509,6 +674,18 @@ export class UndoRedoStackService {
       }
       case 'ReplayFieldTypeConversion': {
         return ReplayFieldTypeConversionCommand.create(commandData.payload);
+      }
+      case 'ApplyViewSnapshot': {
+        return ApplyViewSnapshotCommand.create(commandData.payload);
+      }
+      case 'DeleteView': {
+        return DeleteViewCommand.create(commandData.payload);
+      }
+      case 'EnableViewShare': {
+        return EnableViewShareCommand.create(commandData.payload);
+      }
+      case 'DisableViewShare': {
+        return DisableViewShareCommand.create(commandData.payload);
       }
       case 'Batch': {
         return err(domainError.validation({ message: 'Batch undo/redo command must be expanded' }));
@@ -688,6 +865,10 @@ export class UndoRedoStackService {
         return commandData.payload.recordIds.length;
       case 'RestoreRecords':
         return commandData.payload.records.length;
+      case 'ArchiveRecords':
+        return commandData.payload.recordIds.length;
+      case 'RestoreArchivedRecords':
+        return commandData.payload.records.length;
       case 'ApplyRecordOrders':
         return commandData.payload.records.length;
       default:
@@ -756,8 +937,12 @@ export class UndoRedoStackService {
       attributes[TeableSpanAttributes.TABLE_ID] = commandData.payload.tableId;
     }
 
-    if (commandData.type === 'UpdateRecord') {
+    if (commandData.type === 'UpdateRecord' || commandData.type === 'SetButtonValue') {
       attributes[TeableSpanAttributes.RECORD_ID] = commandData.payload.recordId;
+    }
+
+    if (commandData.type === 'SetButtonValue') {
+      attributes[TeableSpanAttributes.FIELD_ID] = commandData.payload.fieldId;
     }
 
     if (commandData.type === 'UpdateRecords') {
@@ -773,6 +958,18 @@ export class UndoRedoStackService {
       commandData.type === 'ReplayFieldTypeConversion'
     ) {
       attributes[TeableSpanAttributes.FIELD_ID] = commandData.payload.snapshot.field.id;
+    }
+
+    if (commandData.type === 'ApplyViewSnapshot') {
+      attributes['teable.view_id'] = commandData.payload.snapshot.id;
+    }
+
+    if (
+      commandData.type === 'DeleteView' ||
+      commandData.type === 'EnableViewShare' ||
+      commandData.type === 'DisableViewShare'
+    ) {
+      attributes['teable.view_id'] = commandData.payload.viewId;
     }
 
     if (commandData.type === 'Batch') {

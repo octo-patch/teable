@@ -98,6 +98,10 @@ export class AsyncMemoryEventBus implements IEventBus {
       'FieldDuplicated',
       'FieldOptionsAdded',
       'ViewColumnMetaUpdated',
+      'ViewRenamed',
+      'ViewDescriptionUpdated',
+      'ViewLockedUpdated',
+      'ViewOrderUpdated',
     ]);
 
     return events.every((event) => awaitableEventNames.has(event.name.toString()));

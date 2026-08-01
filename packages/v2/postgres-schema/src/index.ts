@@ -9,4 +9,6 @@ export type {
   V1TableMetaTable,
   V1TeableDatabase,
   V1ViewTable,
+  V1PluginTable,
+  V1PluginInstallTable,
 } from './v1/types';

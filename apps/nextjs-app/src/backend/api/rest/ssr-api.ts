@@ -83,6 +83,7 @@ import {
   GET_TEMPLATE_PERMALINK,
   GET_SHORT_LINK,
 } from '@teable/openapi';
+import { INITIAL_LOAD_PAGE_SIZE } from '@teable/sdk/utils/record-window';
 import type { AxiosInstance } from 'axios';
 import { getAxios } from './axios';
 
@@ -148,6 +149,9 @@ export class SsrApi {
             viewId,
             fieldKeyType: FieldKeyType.Id,
             groupBy: currentView?.group ? JSON.stringify(currentView.group) : undefined,
+            // must equal the grid's first window size — the seeded rows back
+            // that query verbatim, and any gap renders as blank rows
+            take: INITIAL_LOAD_PAGE_SIZE,
           },
         });
       })

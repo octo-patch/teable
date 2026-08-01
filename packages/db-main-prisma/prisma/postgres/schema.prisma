@@ -112,6 +112,7 @@ model SpaceDataDbBinding {
   createdTime        DateTime                @default(now()) @map("created_time")
   lastModifiedTime   DateTime?               @updatedAt @map("last_modified_time")
   lastHistoryFlushedAt DateTime?             @map("last_history_flushed_at")
+  lastRemovalFlushedAt DateTime?             @map("last_removal_flushed_at")
   space              Space                   @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   dataDbConnection   DataDbConnection?       @relation(fields: [dataDbConnectionId], references: [id])
 
@@ -817,15 +818,35 @@ model TableTrash {
 }
 
 model RecordTrash {
-  id          String   @id @default(cuid())
-  tableId     String   @map("table_id")
-  recordId    String   @map("record_id")
-  snapshot    String   @map("snapshot")
-  createdTime DateTime @default(now()) @map("created_time")
-  createdBy   String   @map("created_by")
+  id                     String    @id @default(cuid())
+  tableId                String    @map("table_id")
+  recordId               String    @map("record_id")
+  snapshot               String    @map("snapshot")
+  createdTime            DateTime  @default(now()) @map("created_time")
+  createdBy              String    @map("created_by")
+  reason                 String    @default("deleted") @map("reason")
+  recordCreatedTime      DateTime? @map("record_created_time")
+  recordCreatedBy        String?   @map("record_created_by")
+  recordLastModifiedTime DateTime? @map("record_last_modified_time")
+  recordLastModifiedBy   String?   @map("record_last_modified_by")
+  operationId            String?   @map("operation_id")
 
   @@index([tableId, recordId])
   @@map("record_trash")
+}
+
+// Mirror of the db-data-prisma model: shared (non-BYODB) deployments host the
+// data-plane tables in the main db, so the table must exist here too. BYODB
+// tenant dbs get it from the db-data migration instead.
+model RecordRemovalTombstone {
+  id          String   @id
+  tableId     String   @map("table_id")
+  recordId    String   @map("record_id")
+  type        String
+  createdTime DateTime @default(now()) @map("created_time")
+
+  @@index([tableId, recordId])
+  @@map("record_removal_tombstone")
 }
 
 model Plugin {
@@ -1028,7 +1049,7 @@ model Task {
 model TaskRun {
   id               String    @id @default(cuid())
   taskId           String    @map("task_id")
-  baseId           String?   @map("base_id")
+  baseId           String    @map("base_id")
   status           String    @map("status")
   snapshot         String    @map("snapshot")
   dependsOnRunIds  String[]  @default([]) @map("depends_on_run_ids")

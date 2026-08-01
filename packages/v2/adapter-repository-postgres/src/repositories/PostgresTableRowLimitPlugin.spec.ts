@@ -257,6 +257,29 @@ describe('PostgresTableRowLimitPlugin', () => {
     });
   });
 
+  it('rejects creation with a localized rows-per-table error when the cap is exceeded', async () => {
+    const executor = {
+      transformQuery: (node: unknown) => node,
+      compileQuery: () => ({ sql: '', parameters: [], query: { kind: 'RawNode' } }),
+      executeQuery: vi.fn().mockResolvedValue({ rows: [{ count: '10' }] }),
+    };
+    const db = { getExecutor: () => executor } as unknown as Kysely<V1TeableDatabase>;
+
+    const plugin = new PostgresTableRowLimitPlugin(db, new StaticTableRowLimitPolicy(10));
+    const context = createContext();
+    const prepared = (await plugin.prepare(context))._unsafeUnwrap();
+    const result = await plugin.guard(context, prepared);
+
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      code: 'validation.limit.rows_per_table_max',
+      localization: {
+        i18nKey: 'httpErrors.limit.rowsPerTableMax',
+        context: { max: 10 },
+      },
+    });
+  });
+
   it('short-circuits guard and beforePersist when there is nothing to enforce', async () => {
     const plugin = new PostgresTableRowLimitPlugin(
       createDb().db,

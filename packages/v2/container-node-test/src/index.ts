@@ -36,11 +36,13 @@ import {
   StaticTableDataSafetyLimitPlugin,
   TableDataSafetyLimitCommandBusMiddleware,
   v2CoreTokens,
-  type IHasher,
-  type ILogger,
-  type ITableRepository,
-  type LogContext,
-  type TableDataSafetyLimitConfig,
+} from '@teable/v2-core';
+import type {
+  IHasher,
+  ILogger,
+  ITableRepository,
+  LogContext,
+  TableDataSafetyLimitConfig,
 } from '@teable/v2-core';
 import type { DependencyContainer } from '@teable/v2-di';
 import { Lifecycle, container } from '@teable/v2-di';
@@ -51,6 +53,7 @@ import type { Kysely } from 'kysely';
 import { sql } from 'kysely';
 
 import { SpyLogger, type ComputedPlanLogEntry } from './SpyLogger';
+import { TrashSinkEventBus } from './TrashSinkEventBus';
 
 /**
  * Node.js crypto-based hasher implementation for tests.
@@ -137,6 +140,10 @@ export interface IV2NodeTestContainerOptions {
   computedUpdate?: IV2TableRepositoryPostgresConfig['computedUpdate'];
   logToConsole?: boolean;
   logLevel?: V2NodeTestContainerLogLevel;
+  // Set false to keep the plain MemoryEventBus without the record_trash sink —
+  // benchmarks measuring delete paths opt out so the extra INSERT per delete
+  // does not skew timings.
+  trashSink?: boolean;
 }
 
 export type V2NodeTestContainerLogLevel = 'silent' | 'error' | 'warn' | 'info' | 'debug';
@@ -385,7 +392,11 @@ export const createV2NodeTestContainer = async (
       : []
   );
   const queryBus = new MemoryQueryBus(c);
-  const eventBus = new MemoryEventBus(c);
+  // The bus choice must happen here, before the eager singletons resolved below
+  // (ComputedUpdateWorker/Outbox) capture it by constructor injection — a
+  // replace-after-build at a call site would split events across two buses.
+  const eventBus =
+    options.trashSink === false ? new MemoryEventBus(c) : new TrashSinkEventBus(c, dataDb);
 
   c.registerInstance(v2CoreTokens.commandBus, commandBus);
   c.registerInstance(v2CoreTokens.internalCommandBus, commandBus);

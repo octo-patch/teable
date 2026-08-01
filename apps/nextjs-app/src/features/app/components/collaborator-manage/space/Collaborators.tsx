@@ -22,6 +22,7 @@ import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import type { FC, PropsWithChildren } from 'react';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSeatConfirm } from '../../../hooks/useSeatConfirm';
 import { CollaboratorTable } from '../../collaborator/share/common/CollaboratorTable';
 import { useFilteredRoleStatic as useFilteredBaseRoleStatic } from '../base/useFilteredRoleStatic';
 import { OverflowText } from '../components/Collaborator';
@@ -44,6 +45,7 @@ export const Collaborators: FC<PropsWithChildren<ICollaborators>> = (props) => {
   const { t } = useTranslation('common');
   const { user } = useSession();
   const router = useRouter();
+  const confirmSeat = useSeatConfirm({ spaceId });
 
   const setSearchDebounced = useMemo(() => {
     return debounce(setSearch, 200);
@@ -191,7 +193,11 @@ export const Collaborators: FC<PropsWithChildren<ICollaborators>> = (props) => {
   );
 
   const handleUpdateRole = useCallback(
-    (role: IRole, item: CollaboratorItem) => {
+    async (role: IRole, item: CollaboratorItem) => {
+      const addedSeats = item.type === PrincipalType.User && !item.billable ? 1 : 0;
+      if (!(await confirmSeat({ role, count: addedSeats, action: 'roleChange' }))) {
+        return;
+      }
       const isBase = Boolean(item.base);
       const collaboratorId = item.type === PrincipalType.User ? item.userId : item.departmentId;
       updateCollaborator({
@@ -204,7 +210,7 @@ export const Collaborators: FC<PropsWithChildren<ICollaborators>> = (props) => {
         isBase,
       });
     },
-    [spaceId, updateCollaborator]
+    [spaceId, updateCollaborator, confirmSeat]
   );
 
   const handleDelete = useCallback(
@@ -227,7 +233,7 @@ export const Collaborators: FC<PropsWithChildren<ICollaborators>> = (props) => {
       return (
         <div className="inline-flex items-center gap-2">
           <Badge
-            className="max-w-24 px-2 shrink-0 whitespace-nowrap text-muted-foreground"
+            className="max-w-24 shrink-0 whitespace-nowrap px-2 text-muted-foreground"
             variant="outline"
           >
             <OverflowText text={item.base.name} />

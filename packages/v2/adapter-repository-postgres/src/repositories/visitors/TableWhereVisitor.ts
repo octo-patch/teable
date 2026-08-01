@@ -3,14 +3,27 @@ import {
   type ITableSpecVisitor,
   TableAddFieldSpec,
   TableAddFieldsSpec,
+  TableAddViewSpec,
+  TableEnsureViewRowOrderSpec,
+  TableRemoveViewSpec,
+  TableRenameViewSpec,
+  TableUpdateViewDescriptionSpec,
+  TableUpdateViewLockedSpec,
+  TableUpdateViewOrderSpec,
   TableAddSelectOptionsSpec,
   TableDuplicateFieldSpec,
   TableRemoveFieldSpec,
   TableUpdateViewColumnMetaSpec,
+  TableUpdateViewOptionsSpec,
+  TableUpdateViewShareIdSpec,
+  TableUpdateViewShareMetaSpec,
+  TableUpdateViewShareStateSpec,
   TableUpdateViewQueryDefaultsSpec,
   TableRenameSpec,
   TableByBaseIdSpec,
   TableByIdSpec,
+  TableByViewIdSpec,
+  TableWithViewIdsSpec,
   TableByIncomingReferenceToTableSpec,
   TableByIdsSpec,
   TableByNameLikeSpec,
@@ -80,6 +93,8 @@ export type ITableMetaWhere = (
 export type TableWhereSpecInfo = {
   readonly specName?: string;
   readonly tableId?: string;
+  readonly viewId?: string;
+  readonly viewIds?: ReadonlyArray<string>;
   readonly incomingReferenceToTableId?: string;
   readonly baseId?: string;
   readonly tableIds?: ReadonlyArray<string>;
@@ -131,6 +146,60 @@ export class TableWhereVisitor
     );
   }
 
+  visitTableAddView(_: TableAddViewSpec): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({ message: 'TableAddViewSpec is not supported for table filters' })
+    );
+  }
+
+  visitTableEnsureViewRowOrder(
+    _: TableEnsureViewRowOrderSpec
+  ): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableEnsureViewRowOrderSpec is not supported for table filters',
+      })
+    );
+  }
+
+  visitTableRemoveView(_: TableRemoveViewSpec): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({ message: 'TableRemoveViewSpec is not supported for table filters' })
+    );
+  }
+
+  visitTableRenameView(_: TableRenameViewSpec): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({ message: 'TableRenameViewSpec is not supported for table filters' })
+    );
+  }
+
+  visitTableUpdateViewDescription(
+    _: TableUpdateViewDescriptionSpec
+  ): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableUpdateViewDescriptionSpec is not supported for table filters',
+      })
+    );
+  }
+
+  visitTableUpdateViewLocked(_: TableUpdateViewLockedSpec): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableUpdateViewLockedSpec is not supported for table filters',
+      })
+    );
+  }
+
+  visitTableUpdateViewOrder(_: TableUpdateViewOrderSpec): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableUpdateViewOrderSpec is not supported for table filters',
+      })
+    );
+  }
+
   visitTableAddSelectOptions(_: TableAddSelectOptionsSpec): Result<ITableMetaWhere, DomainError> {
     return err(
       domainError.validation({
@@ -163,6 +232,42 @@ export class TableWhereVisitor
     );
   }
 
+  visitTableUpdateViewOptions(_: TableUpdateViewOptionsSpec): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableUpdateViewOptionsSpec is not supported for table filters',
+      })
+    );
+  }
+
+  visitTableUpdateViewShareMeta(
+    _: TableUpdateViewShareMetaSpec
+  ): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableUpdateViewShareMetaSpec is not supported for table filters',
+      })
+    );
+  }
+
+  visitTableUpdateViewShareId(_: TableUpdateViewShareIdSpec): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableUpdateViewShareIdSpec is not supported for table filters',
+      })
+    );
+  }
+
+  visitTableUpdateViewShareState(
+    _: TableUpdateViewShareStateSpec
+  ): Result<ITableMetaWhere, DomainError> {
+    return err(
+      domainError.validation({
+        message: 'TableUpdateViewShareStateSpec is not supported for table filters',
+      })
+    );
+  }
+
   visitTableUpdateViewQueryDefaults(
     _: TableUpdateViewQueryDefaultsSpec
   ): Result<ITableMetaWhere, DomainError> {
@@ -188,6 +293,34 @@ export class TableWhereVisitor
   visitTableById(spec: TableByIdSpec): Result<ITableMetaWhere, DomainError> {
     const cond: ITableMetaWhere = (eb) => eb.eb('id', '=', spec.tableId().toString());
     this.mergeSpecInfo({ specName: 'TableByIdSpec', tableId: spec.tableId().toString() });
+    return this.addCond(cond).map(() => cond);
+  }
+
+  visitTableByViewId(spec: TableByViewIdSpec): Result<ITableMetaWhere, DomainError> {
+    const viewId = spec.viewId().toString();
+    const childStatePredicate =
+      this.state === 'deleted'
+        ? sql`"child_view"."deleted_time" = "table_meta"."deleted_time"`
+        : this.state === 'all'
+          ? sql`true`
+          : sql`"child_view"."deleted_time" is null`;
+    const cond: ITableMetaWhere = () => sql<boolean>`
+      exists (
+        select 1
+        from "view" as "child_view"
+        where "child_view"."table_id" = ${sql.ref('table_meta.id')}
+          and "child_view"."id" = ${viewId}
+          and ${childStatePredicate}
+      )
+    `;
+    this.mergeSpecInfo({ specName: 'TableByViewIdSpec', viewId });
+    return this.addCond(cond).map(() => cond);
+  }
+
+  visitTableWithViewIds(spec: TableWithViewIdsSpec): Result<ITableMetaWhere, DomainError> {
+    const viewIds = spec.viewIds().map((viewId) => viewId.toString());
+    const cond: ITableMetaWhere = () => sql<boolean>`true`;
+    this.mergeSpecInfo({ specName: 'TableWithViewIdsSpec', viewIds });
     return this.addCond(cond).map(() => cond);
   }
 

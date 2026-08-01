@@ -59,9 +59,6 @@
     "refresh": "Yenile",
     "login": "Giriş Yap",
     "useTemplate": "Şablon Kullan",
-    "copyToMySpace": "Copy to my space",
-    "saveToMySpace": "Save to my space",
-    "supportSaveCopy": "Support saving a copy",
     "backToSpace": "Alana Dön",
     "switchBase": "Veritabanı Değiştir",
     "continue": "Devam Et",
@@ -510,6 +507,20 @@
     "levelTips": "Bu alan şu anda {{level}} planında",
     "billable": "Faturalandırılabilir",
     "billableByAuthorityMatrix": "Yetki matrisi tarafından oluşturulan faturalandırma",
+    "seatConfirm": {
+      "title": "Bu davet abonelik ücretinizi artıracak",
+      "roleChangeTitle": "Bu rol değişikliği abonelik ücretinizi artıracak",
+      "matrixTitle": "Üye eklemek abonelik ücretinizi artıracak",
+      "inviteDesc_one": "Davet ettiğiniz üye {{role}} rolüyle katılacak ve 1 abonelik koltuğu kullanacak; ücretiniz buna göre artacak. Yalnızca görüntüleme veya yorum gerekiyorsa ücretsiz İzleyici veya Yorumcu rolünü seçmeniz yeterli.",
+      "inviteDesc_other": "Davet ettiğiniz {{count}} üye {{role}} rolüyle katılacak ve {{count}} abonelik koltuğu kullanacak; ücretiniz buna göre artacak. Yalnızca görüntüleme veya yorum gerekiyorsa ücretsiz İzleyici veya Yorumcu rolünü seçmeniz yeterli.",
+      "linkDesc": "Bu bağlantıyla katılan üyeler {{role}} rolünü alır ve her biri 1 abonelik koltuğu kullanır; katılan kişi sayısıyla ücretiniz artar. Yalnızca görüntüleme veya yorum için ücretsiz İzleyici veya Yorumcu rolünü seçmeniz yeterli.",
+      "roleChangeDesc": "{{role}} rolüne geçtikten sonra bu üye 1 abonelik koltuğu kullanacak ve ücretiniz buna göre artacak.",
+      "matrixDesc": "Bu üye şu anda ücretsiz bir role sahip (İzleyici/Yorumcu). Yetki matrisine eklendiğinde 1 abonelik koltuğu kullanacak ve ücretiniz buna göre artacak.",
+      "seatLimitTitle": "Lisans koltuğu yetersiz",
+      "seatLimitDesc": "Bu örnek, lisanslı {{seatLimit}} koltuğun {{seats}} tanesini kullanıyor ve kalan koltuklar bu işlem için yeterli değil. Ek koltuk satın almak için lütfen yöneticinizle iletişime geçin. Yalnızca görüntüleme veya yorum gerekiyorsa ücretsiz İzleyici veya Yorumcu rolünü kullanabilirsiniz.",
+      "seatLimitConfirm": "Anladım",
+      "confirmInvite": "Onayla ve davet et"
+    },
     "licenseExpiredGracePeriod": "Kendi sunucunuzda barındırma lisansınızın süresi doldu ve {{expiredTime}} tarihinde ücretsiz plana düşürülecek. Premium özelliklere erişimi korumak için lütfen lisansınızı hemen güncelleyin.",
     "licenseAutoFetchFailed": "Lisansın otomatik yenilenmesi başarısız oldu. Sürüm düşürülmeden önce {{days}} gün ek süre kaldı.",
     "licenseAutoFetchRetryFailed": "Otomatik yenileme yine başarısız oldu. Lütfen Teable sunucusuyla bağlantıyı kontrol edin veya lisansı manuel olarak güncelleyin.",
@@ -1285,10 +1296,10 @@
     }
   },
   "changelog": {
-    "newUpdate": "28 TEMMUZ GÜNCELLEMESİ",
-    "title": "AI Aracıları için Teable Skill",
-    "url": "https://help.teable.ai/en/changelog#jul-28-2026",
-    "id": "changelog-2026-07-28-teable-skill-for-ai-agents"
+    "newUpdate": "31 TEMMUZ GÜNCELLEMESİ",
+    "title": "Teable'da GPT 5.6 Fiyat İndirimi",
+    "url": "https://help.teable.ai/en/changelog#jul-31-2026",
+    "id": "changelog-2026-07-31-gpt-5-6-price-cuts-in-teable"
   },
   "resourceDescription": {
     "addDescription": "Açıklama ekle",

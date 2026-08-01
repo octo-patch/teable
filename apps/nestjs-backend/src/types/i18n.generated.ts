@@ -247,9 +247,6 @@ export type I18nTranslations = {
             "refresh": string;
             "login": string;
             "useTemplate": string;
-            "copyToMySpace": string;
-            "saveToMySpace": string;
-            "supportSaveCopy": string;
             "backToSpace": string;
             "switchBase": string;
             "getMore": string;
@@ -708,8 +705,6 @@ export type I18nTranslations = {
                 "linkCreatedTime": string;
                 "linkCopySuccess": string;
                 "linkRemove": string;
-                "desc_billable_one": string;
-                "desc_billable_other": string;
                 "spaceTitleWithCount": string;
                 "baseTitle": string;
                 "allCollaboratorsTitle": string;
@@ -769,6 +764,20 @@ export type I18nTranslations = {
             "viewPricing": string;
             "billable": string;
             "billableByAuthorityMatrix": string;
+            "seatConfirm": {
+                "title": string;
+                "roleChangeTitle": string;
+                "matrixTitle": string;
+                "inviteDesc_one": string;
+                "inviteDesc_other": string;
+                "linkDesc": string;
+                "roleChangeDesc": string;
+                "matrixDesc": string;
+                "seatLimitTitle": string;
+                "seatLimitDesc": string;
+                "seatLimitConfirm": string;
+                "confirmInvite": string;
+            };
             "licenseExpiredGracePeriod": string;
             "licenseAutoFetchFailed": string;
             "licenseAutoFetchRetryFailed": string;
@@ -2515,6 +2524,8 @@ export type I18nTranslations = {
                 "tableTrashRead": string;
                 "tableTrashUpdate": string;
                 "tableTrashReset": string;
+                "tableArchiveRead": string;
+                "tableArchiveManage": string;
                 "viewCreate": string;
                 "viewDelete": string;
                 "viewRead": string;
@@ -2530,6 +2541,7 @@ export type I18nTranslations = {
                 "recordRead": string;
                 "recordUpdate": string;
                 "recordCopy": string;
+                "recordArchive": string;
                 "automationCreate": string;
                 "automationDelete": string;
                 "automationRead": string;
@@ -3063,15 +3075,18 @@ export type I18nTranslations = {
                 "nameMaxLength": string;
                 "descriptionMaxLength": string;
             };
-            "validation": {
-                "field": {
-                    "unique": string;
-                };
-            };
             "custom": {
                 "fieldValueNotNull": string;
                 "fieldValueDuplicate": string;
+                "recordFieldValueNotNull": string;
+                "recordFieldValueDuplicate": string;
                 "linkFieldValueDuplicate": string;
+                "linkBatchDuplicate": string;
+                "linkOneManyDuplicate": string;
+                "linkOneOneDuplicate": string;
+                "fieldMaxColumnLimit": string;
+                "fieldRequiredExistingValues": string;
+                "fieldUniqueExistingValues": string;
                 "requestTimeout": string;
                 "searchTimeOut": string;
                 "dependencyNodeRequire": string;
@@ -4190,17 +4205,6 @@ export type I18nTranslations = {
             "help": string;
             "helpCenter": string;
         };
-        "validation": {
-            "link": {
-                "batch_duplicate": string;
-                "one_many_duplicate": string;
-                "one_one_duplicate": string;
-            };
-            "field": {
-                "maxColumnLimit": string;
-                "requiredExistingValues": string;
-            };
-        };
         "field": {
             "advancedProps": string;
             "hide": string;
@@ -4603,6 +4607,11 @@ export type I18nTranslations = {
                 "fillFailed": string;
                 "clearing": string;
                 "clearSuccessful": string;
+                "archiveRecordConfirmTitle": string;
+                "archiveRecordConfirmDescription": string;
+                "archiveRecord": string;
+                "archiving": string;
+                "archiveSuccessful": string;
                 "deleting": string;
                 "deleteSuccessful": string;
                 "deleteStream": {
@@ -5168,6 +5177,8 @@ export type I18nTranslations = {
             "insertRecordBelow": string;
             "deleteRecord": string;
             "deleteAllSelectedRecords": string;
+            "archiveRecord": string;
+            "archiveAllSelectedRecords": string;
             "editField": string;
             "insertFieldLeft": string;
             "insertFieldRight": string;
@@ -5238,11 +5249,49 @@ export type I18nTranslations = {
             "title": string;
             "description": string;
         };
+        "tableArchive": {
+            "title": string;
+            "menuTitle": string;
+            "archivedTime": string;
+            "archivedBy": string;
+            "recordDetail": string;
+            "empty": string;
+            "allCreators": string;
+            "filterArchivedTime": string;
+            "searchPlaceholder": string;
+            "clearFilter": string;
+            "export": string;
+            "exporting": string;
+            "exportSucceed": string;
+            "restoreSelected": string;
+            "permanentDeleteSelected": string;
+            "permanentDeleteConfirm": string;
+            "permanentDeleteSucceed": string;
+            "resetArchive": string;
+            "resetArchiveConfirm": string;
+            "resetSucceed": string;
+            "orderBy": {
+                "archivedTime": string;
+                "recordCreatedTime": string;
+                "recordLastModifiedTime": string;
+            };
+        };
         "tableTrash": {
             "title": string;
             "resourceType": string;
             "deletedResource": string;
             "moreResources": string;
+            "deletedTime": string;
+            "deletedBy": string;
+            "filterAllTypes": string;
+            "filterAllUsers": string;
+            "filterDeletedTime": string;
+            "clearFilter": string;
+            "recordsDialogTitle": string;
+            "recordDetail": string;
+            "filterAllCreators": string;
+            "filterCreatedTime": string;
+            "searchPlaceholder": string;
         };
         "baseShare": {
             "shareTitle": string;
@@ -5272,6 +5321,9 @@ export type I18nTranslations = {
             "linkScopeDialogTitle": string;
             "linkHolderCanCopyAndSave": string;
             "linkHolderCanCopyAndSaveDesc": string;
+            "copyToMySpace": string;
+            "saveToMySpace": string;
+            "supportSaveCopy": string;
             "editRequiresLogin": string;
             "enterPassword": string;
             "allowCopyData": string;

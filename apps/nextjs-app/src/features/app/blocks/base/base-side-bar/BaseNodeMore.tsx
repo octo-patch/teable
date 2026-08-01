@@ -43,6 +43,7 @@ import {
 import { toast } from '@teable/ui-lib/shadcn/ui/sonner';
 import {
   AppWindowMacIcon,
+  Archive,
   CopyPlus,
   FileInputIcon,
   Info,
@@ -54,9 +55,12 @@ import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import type { ReactNode } from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { useArchiveUpsell } from '@/features/app/hooks/useArchiveUpsell';
 import { useBaseResource } from '@/features/app/hooks/useBaseResource';
+import { useBaseUsage } from '@/features/app/hooks/useBaseUsage';
 import { useSetting } from '@/features/app/hooks/useSetting';
 import { tableConfig } from '@/features/i18n/table.config';
+import { TableArchiveDialog } from '@overridable/TableArchiveDialog';
 import { LoginAppWarning } from '../../../components/LoginAppWarning';
 import { useDownload } from '../../../hooks/useDownLoad';
 import { TableImport } from '../../import-table';
@@ -475,6 +479,14 @@ export const TableOperation = (props: ITableOperationProps) => {
   const basePermission = useBasePermission();
   const canTableRecordHistoryRead = basePermission?.['table_record_history|read'];
   const canTableTrashRead = basePermission?.['table|trash_read'];
+  const baseUsage = useBaseUsage();
+  const {
+    archiveUnlocked,
+    badge: archiveUpgradeBadge,
+    needsUpgrade: archiveNeedsUpgrade,
+    handleUpgradeClick: onArchiveUpgradeClick,
+  } = useArchiveUpsell(baseUsage);
+  const canTableArchiveRead = Boolean(basePermission?.['table|archive_read'] && archiveUnlocked);
   const node = useNode(resourceId);
   const nodeId = node?.id ?? '';
   const loginApps = useMemo(() => {
@@ -487,6 +499,7 @@ export const TableOperation = (props: ITableOperationProps) => {
   const [apiDialogOpen, setApiDialogOpen] = useState(false);
   const [tableHistoryDialogOpen, setTableHistoryDialogOpen] = useState(false);
   const [tableTrashDialogOpen, setTableTrashDialogOpen] = useState(false);
+  const [tableArchiveDialogOpen, setTableArchiveDialogOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [importVisible, setImportVisible] = useState(false);
   const [duplicateSetting, setDuplicateSetting] = useState(false);
@@ -519,8 +532,9 @@ export const TableOperation = (props: ITableOperationProps) => {
         basePermission,
         canTableRecordHistoryRead,
         canTableTrashRead,
+        canTableArchiveRead,
       }),
-    [basePermission, canTableRecordHistoryRead, canTableTrashRead, node, table]
+    [basePermission, canTableRecordHistoryRead, canTableTrashRead, canTableArchiveRead, node, table]
   );
   const shareNodeId = menuPermission.shareTable && node ? node.id : undefined;
 
@@ -719,6 +733,14 @@ export const TableOperation = (props: ITableOperationProps) => {
         />
       )}
 
+      {menuPermission.tableArchive && !archiveNeedsUpgrade && (
+        <TableArchiveDialog
+          open={tableArchiveDialogOpen}
+          onOpenChange={setTableArchiveDialogOpen}
+          tableId={resourceId}
+        />
+      )}
+
       {apiDialogOpen && (
         <APIDialog open={apiDialogOpen} setOpen={setApiDialogOpen}>
           <span className="hidden text-sm">API</span>
@@ -797,7 +819,7 @@ export const TableOperation = (props: ITableOperationProps) => {
                 className="h-auto w-full justify-start gap-3 rounded-none border-b p-3"
               >
                 <History className="size-4" />
-                <span>{t('table:table.tableRecordHistory')}</span>
+                <span>{t('sdk:noun.recordHistory')}</span>
               </Button>
             </SheetTrigger>
             <SheetContent
@@ -820,7 +842,7 @@ export const TableOperation = (props: ITableOperationProps) => {
                 className="h-auto w-full justify-start gap-3 rounded-none border-b p-3"
               >
                 <Trash className="size-4" />
-                <span>{t('table:tableTrash.title')}</span>
+                <span>{t('common:noun.trash')}</span>
               </Button>
             </SheetTrigger>
             <SheetContent
@@ -938,7 +960,9 @@ export const TableOperation = (props: ITableOperationProps) => {
             </DropdownMenuItem>
           )}
 
-          {(menuPermission.tableRecordHistory || menuPermission.tableTrash) && (
+          {(menuPermission.tableRecordHistory ||
+            menuPermission.tableTrash ||
+            menuPermission.tableArchive) && (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <History className="mr-2 size-4" />
@@ -953,7 +977,7 @@ export const TableOperation = (props: ITableOperationProps) => {
                       }}
                     >
                       <History className="mr-1 size-4" />
-                      {t('table:table.tableRecordHistory')}
+                      {t('sdk:noun.recordHistory')}
                     </DropdownMenuItem>
                   )}
                   {menuPermission.tableTrash && (
@@ -963,7 +987,26 @@ export const TableOperation = (props: ITableOperationProps) => {
                       }}
                     >
                       <Trash className="mr-1 size-4" />
-                      {t('table:tableTrash.title')}
+                      {t('common:noun.trash')}
+                    </DropdownMenuItem>
+                  )}
+                  {menuPermission.tableArchive && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        if (archiveNeedsUpgrade) {
+                          onArchiveUpgradeClick();
+                          return;
+                        }
+                        setTableArchiveDialogOpen(true);
+                      }}
+                    >
+                      <Archive className="mr-1 size-4" />
+                      {t('table:tableArchive.menuTitle')}
+                      {archiveUpgradeBadge && (
+                        <span className="pointer-events-none ml-auto flex items-center pl-2">
+                          {archiveUpgradeBadge}
+                        </span>
+                      )}
                     </DropdownMenuItem>
                   )}
                 </DropdownMenuSubContent>

@@ -48,13 +48,14 @@ export class ShareAuthGuard extends PassportAuthGuard([SHARE_JWT_STRATEGY]) {
         shareId,
         templateHeader,
         shareViewHeader,
-        req.headers.cookie
+        req.headers.cookie,
+        req.useV2 === true
       );
       req.shareInfo = shareInfo;
       return activate;
     }
 
-    const shareInfo = await this.shareAuthService.getShareViewInfo(shareId);
+    const shareInfo = await this.shareAuthService.getShareViewInfo(shareId, req.useV2 === true);
 
     try {
       req.shareInfo = shareInfo;

@@ -19,11 +19,12 @@ import {
   PopoverTrigger,
 } from '@teable/ui-lib/shadcn';
 import { noop } from 'lodash';
-import { CopyPlus, Trash } from 'lucide-react';
+import { Archive, CopyPlus, Trash } from 'lucide-react';
 import { useTranslation, Trans } from 'next-i18next';
 import { Fragment, useCallback, useRef, useState } from 'react';
 import { useClickAway } from 'react-use';
 import { useAI } from '@/features/app/hooks/useAI';
+import { useArchiveUpsell } from '@/features/app/hooks/useArchiveUpsell';
 import { useBaseUsage } from '@/features/app/hooks/useBaseUsage';
 import { tableConfig } from '@/features/i18n/table.config';
 
@@ -48,6 +49,7 @@ enum MenuItemType {
   Copy = 'Copy',
   CopyLink = 'CopyLink',
   Delete = 'Delete',
+  Archive = 'Archive',
   InsertAbove = 'InsertAbove',
   InsertBelow = 'InsertBelow',
   Duplicate = 'Duplicate',
@@ -203,6 +205,56 @@ const buildCollaborationMenuItems = ({
   },
 ];
 
+const buildArchiveMenuItems = ({
+  t,
+  canArchive,
+  isMultipleSelected,
+  isUndeletable,
+  tableId,
+  recordMenu,
+  needsUpgrade,
+  upgradeBadge,
+  onUpgradeClick,
+}: {
+  t: MenuTranslate;
+  canArchive: boolean;
+  isMultipleSelected: boolean;
+  isUndeletable: boolean;
+  tableId?: string;
+  recordMenu: RecordMenuState;
+  needsUpgrade: boolean;
+  upgradeBadge: React.ReactNode;
+  onUpgradeClick: () => void;
+}): IMenuItemProps<MenuItemType>[] => {
+  const name = isMultipleSelected
+    ? t('table:menu.archiveAllSelectedRecords')
+    : t('table:menu.archiveRecord');
+  return [
+    {
+      type: MenuItemType.Archive,
+      name,
+      icon: <Archive className={iconClassName} />,
+      hidden: !canArchive || isUndeletable || !recordMenu?.archiveRecords,
+      render: needsUpgrade ? (
+        <div className="flex items-center">
+          <Archive className={iconClassName} />
+          {name}
+          <span className="pointer-events-none ml-2 flex items-center">{upgradeBadge}</span>
+        </div>
+      ) : undefined,
+      onClick: () => {
+        if (needsUpgrade) {
+          onUpgradeClick();
+          return;
+        }
+        if (recordMenu && tableId && recordMenu.archiveRecords) {
+          void recordMenu.archiveRecords();
+        }
+      },
+    },
+  ];
+};
+
 const buildDeleteMenuItems = ({
   t,
   canDelete,
@@ -300,6 +352,12 @@ export const RecordMenu = () => {
   const { enable: aiEnable } = useAI();
   const usage = useBaseUsage({ disabled: !baseId });
   const chatEnabled = Boolean(aiEnable && usage?.limit?.chatAIEnable);
+  const {
+    archiveUnlocked,
+    badge: archiveUpgradeBadge,
+    needsUpgrade: archiveNeedsUpgrade,
+    handleUpgradeClick: onArchiveUpgradeClick,
+  } = useArchiveUpsell(usage);
 
   useClickAway(recordMenuRef, () => {
     closeRecordMenu();
@@ -331,6 +389,7 @@ export const RecordMenu = () => {
   const canUpdate = Boolean(permission['record|update']);
   const canComment = Boolean(permission['record|comment']);
   const canDelete = Boolean(permission['record|delete']);
+  const canArchive = Boolean(permission['record|archive'] && archiveUnlocked);
   const style = position
     ? {
         left: position.x,
@@ -363,7 +422,17 @@ export const RecordMenu = () => {
       chatEnabled,
       recordMenu,
     }),
-    [],
+    buildArchiveMenuItems({
+      t: t as unknown as MenuTranslate,
+      canArchive,
+      isMultipleSelected: Boolean(isMultipleSelected),
+      isUndeletable: Boolean(record?.undeletable),
+      tableId,
+      recordMenu,
+      needsUpgrade: archiveNeedsUpgrade,
+      upgradeBadge: archiveUpgradeBadge,
+      onUpgradeClick: onArchiveUpgradeClick,
+    }),
     buildDeleteMenuItems({
       t: t as unknown as MenuTranslate,
       canDelete,

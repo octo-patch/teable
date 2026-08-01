@@ -26,7 +26,10 @@ import type {
   IRecordInsertOrderRo,
   IUpdateRecordOrdersRo,
   IRecordGetCollaboratorsRo,
+  IGetArchiveItemsQuery,
   IGetRecordHistoryQuery,
+  IGetTrashItemRecordsQuery,
+  ITableTrashItemsFilter,
   TrashType,
 } from '@teable/openapi';
 
@@ -204,7 +207,22 @@ export const ReactQueryKeys = {
   getSpaceTrash: (resourceType: TrashType, spaceId?: string) =>
     ['space-trash', resourceType, spaceId] as const,
 
-  getTrashItems: (resourceId: string) => ['trash-items', resourceId] as const,
+  // Without `query` the key is a prefix that matches every filter variant — use it for
+  // invalidation.
+  getTrashItemRecords: (trashId: string, query?: Omit<IGetTrashItemRecordsQuery, 'cursor'>) =>
+    query
+      ? (['trash-item-records', trashId, query] as const)
+      : (['trash-item-records', trashId] as const),
+
+  // Without `query` the key is a prefix that matches every query variant — use it for
+  // invalidation.
+  getTrashItems: (resourceId: string, query?: ITableTrashItemsFilter) =>
+    query ? (['trash-items', resourceId, query] as const) : (['trash-items', resourceId] as const),
+
+  // Without `query` the key is a prefix that matches every query variant — use it for
+  // invalidation.
+  getArchiveItems: (tableId: string, query?: IGetArchiveItemsQuery) =>
+    query ? (['archive-items', tableId, query] as const) : (['archive-items', tableId] as const),
 
   getDashboardList: (baseId: string) => ['dashboard-list', baseId] as const,
 
@@ -245,6 +263,12 @@ export const ReactQueryKeys = {
   getEnterpriseLicenseStatus: () => ['enterprise-license-status'] as const,
 
   userLastVisitMap: (baseId: string) => ['user-last-visit-map', baseId] as const,
+
+  // prefix-matched by ['base-entry-map'] in useEnterBase — keep the first
+  // segment stable
+  baseEntryMap: (spaceId: string) => ['base-entry-map', spaceId] as const,
+
+  pinEntryMap: () => ['pin-entry-map'] as const,
 
   getTaskStatusCollection: (tableId: string) => ['task-status-collection', tableId] as const,
 

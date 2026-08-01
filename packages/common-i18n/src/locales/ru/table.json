@@ -110,17 +110,6 @@
     "help": "Посетите <HelpCenter /> для получения дополнительной информации.",
     "helpCenter": "Центр помощи"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "Невозможно связать запись: в этом же пакете она уже связана другой записью. В отношениях один-ко-многим каждая дочерняя запись может принадлежать только одной родительской записи.",
-      "one_many_duplicate": "Невозможно связать запись: она уже связана с другой записью. В отношениях один-ко-многим каждая дочерняя запись может принадлежать только одной родительской записи.",
-      "one_one_duplicate": "Невозможно связать запись: целевая запись уже связана другой записью в отношении один-к-одному."
-    },
-    "field": {
-      "maxColumnLimit": "Таблица \"{{tableName}}\" может содержать не более {{maxFieldCount}} полей.",
-      "requiredExistingValues": "Нельзя сделать поле \"{{fieldName}}\" обязательным, поскольку существующие записи содержат пустые значения."
-    }
-  },
   "field": {
     "advancedProps": "Расширенные свойства",
     "hide": "скрыть",
@@ -479,6 +468,11 @@
       "fillFailed": "Заполнение не удалось",
       "clearing": "Очистка...",
       "clearSuccessful": "Очистка успешна",
+      "archiveRecordConfirmTitle": "Архивировать записи",
+      "archiveRecordConfirmDescription": "Это действие архивирует {{recordCount}} записей. Архивированные записи можно просматривать и восстанавливать из архива таблицы.",
+      "archiveRecord": "Архивировать",
+      "archiving": "Архивирование...",
+      "archiveSuccessful": "Архивирование выполнено",
       "deleting": "Удаление...",
       "deleteSuccessful": "Удаление успешно",
       "deleteStream": {
@@ -835,6 +829,8 @@
     "insertRecordBelow": "Вставить запись ниже",
     "deleteRecord": "Удалить запись",
     "deleteAllSelectedRecords": "Удалить все выбранные записи",
+    "archiveRecord": "Архивировать запись",
+    "archiveAllSelectedRecords": "Архивировать все выбранные записи",
     "editField": "Редактировать поле",
     "insertFieldLeft": "Вставить слева",
     "insertFieldRight": "Вставить справа",
@@ -890,11 +886,49 @@
   },
   "lastModifiedTime": "Время последнего изменения",
   "lastModify": "Последнее изменение: ",
+  "tableArchive": {
+    "title": "Архив таблицы",
+    "menuTitle": "Архив",
+    "archivedTime": "Время архивирования",
+    "archivedBy": "Кем архивировано",
+    "recordDetail": "Детали записи",
+    "empty": "Нет архивированных записей",
+    "allCreators": "Все создатели",
+    "filterArchivedTime": "Время архивирования",
+    "searchPlaceholder": "Поиск архивированных записей",
+    "clearFilter": "Сбросить фильтры",
+    "export": "Экспорт CSV",
+    "exporting": "Экспорт… {{count}} строк",
+    "exportSucceed": "Экспорт завершён, начинается загрузка",
+    "restoreSelected": "Восстановить ({{count}})",
+    "permanentDeleteSelected": "Удалить навсегда ({{count}})",
+    "permanentDeleteConfirm": "Удалить навсегда {{count}} архивированных записей? Это действие нельзя отменить.",
+    "permanentDeleteSucceed": "Удалено навсегда",
+    "resetArchive": "Очистить архив",
+    "resetArchiveConfirm": "Очистить все архивированные записи этой таблицы? Это действие нельзя отменить.",
+    "resetSucceed": "Архив очищен",
+    "orderBy": {
+      "archivedTime": "Сортировать по времени архивирования",
+      "recordCreatedTime": "Сортировать по времени создания",
+      "recordLastModifiedTime": "Сортировать по последнему изменению"
+    }
+  },
   "tableTrash": {
     "title": "Корзина",
     "resourceType": "Тип",
     "deletedResource": "Ресурс",
-    "moreResources": "и ещё {{count}}"
+    "moreResources": "и ещё {{count}}",
+    "deletedTime": "Время удаления",
+    "deletedBy": "Удалил",
+    "filterAllTypes": "Все типы",
+    "filterAllUsers": "Все пользователи",
+    "filterDeletedTime": "Время удаления",
+    "clearFilter": "Сбросить фильтры",
+    "recordsDialogTitle": "Удалённые записи ({{count}})",
+    "recordDetail": "Детали записи",
+    "filterAllCreators": "Все создатели",
+    "filterCreatedTime": "Время создания",
+    "searchPlaceholder": "Поиск записей"
   },
   "baseShare": {
     "shareTitle": "Поделиться",
@@ -924,7 +958,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "Может сохранить как копию",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "Сохраните копию в своем пространстве",
+    "editRequiresLogin": "Войдите, чтобы редактировать записи",
     "enterPassword": "Введите пароль",
     "allowCopyData": "Разрешить зрителям копировать данные",
     "sharedNode": "Общий узел",

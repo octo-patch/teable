@@ -107,17 +107,6 @@
     "help": "Visite el <HelpCenter /> para obtener más información.",
     "helpCenter": "Centro de ayuda"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "No se puede vincular el registro: en el mismo lote ya está vinculado por otro registro. En las relaciones de uno a muchos, cada registro secundario solo puede pertenecer a un registro principal.",
-      "one_many_duplicate": "No se puede vincular el registro: ya está vinculado a otro registro. En las relaciones de uno a muchos, cada registro secundario solo puede pertenecer a un registro principal.",
-      "one_one_duplicate": "No se puede vincular el registro: el registro de destino ya está vinculado por otro registro en una relación de uno a uno."
-    },
-    "field": {
-      "maxColumnLimit": "La tabla \"{{tableName}}\" puede tener como máximo {{maxFieldCount}} campos.",
-      "requiredExistingValues": "No se puede marcar el campo \"{{fieldName}}\" como obligatorio porque hay registros existentes con valores vacíos."
-    }
-  },
   "field": {
     "advancedProps": "Propiedades avanzadas",
     "hide": "ocultar",
@@ -480,6 +469,11 @@
       "fillFailed": "Llenado falló",
       "clearing": "Claro...",
       "clearSuccessful": "Claro exitoso",
+      "archiveRecordConfirmTitle": "Archivar registros",
+      "archiveRecordConfirmDescription": "Esta acción archivará {{recordCount}} registros. Los registros archivados se pueden ver y restaurar desde el archivo de la tabla.",
+      "archiveRecord": "Archivar",
+      "archiving": "Archivando...",
+      "archiveSuccessful": "Archivado con éxito",
       "deleting": "Eliminar ...",
       "deleteSuccessful": "Eliminar exitoso",
       "deleteStream": {
@@ -835,6 +829,8 @@
     "insertRecordBelow": "Insertar <input /> registro a continuación",
     "deleteRecord": "Eliminar registro",
     "deleteAllSelectedRecords": "Eliminar todos los registros seleccionados",
+    "archiveRecord": "Archivar registro",
+    "archiveAllSelectedRecords": "Archivar todos los registros seleccionados",
     "editField": "Campo de edición",
     "insertFieldLeft": "Insertar a la izquierda",
     "insertFieldRight": "Insertar a la derecha",
@@ -897,11 +893,49 @@
   "pasteNewRecords": {
     "title": "¿Quieres agregar múltiples registros?"
   },
+  "tableArchive": {
+    "title": "Archivo de la tabla",
+    "menuTitle": "Archivo",
+    "archivedTime": "Fecha de archivado",
+    "archivedBy": "Archivado por",
+    "recordDetail": "Detalle del registro",
+    "empty": "No hay registros archivados",
+    "allCreators": "Todos los creadores",
+    "filterArchivedTime": "Fecha de archivado",
+    "searchPlaceholder": "Buscar registros archivados",
+    "clearFilter": "Borrar filtros",
+    "export": "Exportar CSV",
+    "exporting": "Exportando… {{count}} filas",
+    "exportSucceed": "Exportación completada, iniciando descarga",
+    "restoreSelected": "Restaurar ({{count}})",
+    "permanentDeleteSelected": "Eliminar permanentemente ({{count}})",
+    "permanentDeleteConfirm": "¿Eliminar permanentemente {{count}} registros archivados? Esta acción no se puede deshacer.",
+    "permanentDeleteSucceed": "Eliminado permanentemente",
+    "resetArchive": "Vaciar archivo",
+    "resetArchiveConfirm": "¿Vaciar todos los registros archivados de esta tabla? Esta acción no se puede deshacer.",
+    "resetSucceed": "Archivo vaciado",
+    "orderBy": {
+      "archivedTime": "Ordenar por fecha de archivado",
+      "recordCreatedTime": "Ordenar por fecha de creación",
+      "recordLastModifiedTime": "Ordenar por última modificación"
+    }
+  },
   "tableTrash": {
     "title": "Papelera",
     "resourceType": "Tipo",
     "deletedResource": "Recurso",
-    "moreResources": "y {{count}} más"
+    "moreResources": "y {{count}} más",
+    "deletedTime": "Fecha de eliminación",
+    "deletedBy": "Eliminado por",
+    "filterAllTypes": "Todos los tipos",
+    "filterAllUsers": "Todos los usuarios",
+    "filterDeletedTime": "Fecha de eliminación",
+    "clearFilter": "Borrar filtros",
+    "recordsDialogTitle": "Registros eliminados ({{count}})",
+    "recordDetail": "Detalles del registro",
+    "filterAllCreators": "Todos los creadores",
+    "filterCreatedTime": "Fecha de creación",
+    "searchPlaceholder": "Buscar registros"
   },
   "baseShare": {
     "shareTitle": "Compartir",
@@ -931,7 +965,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "Puede guardar como copia",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "Guarda una copia en tu espacio",
+    "editRequiresLogin": "Inicia sesión para editar registros",
     "enterPassword": "Introducir contraseña",
     "allowCopyData": "Permitir a los espectadores copiar datos",
     "sharedNode": "Nodo compartido",

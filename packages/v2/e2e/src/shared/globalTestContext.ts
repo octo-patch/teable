@@ -52,23 +52,33 @@ import {
   deleteByRangeOkResponseSchema,
 } from '@teable/v2-contract-http';
 import { createV2ExpressRouter } from '@teable/v2-contract-http-express';
-import type {
-  ICreateTableCommandInput,
-  ICreateFieldCommandInput,
-  ICreateTablesCommandInput,
-  IDuplicateTableCommandInput,
-  IPasteCommandInput,
-  IImportCsvCommandInput,
-  IImportRecordsCommandInput,
-  IUpdateFieldCommandInput,
-  IUpdateRecordsCommandInput,
-  RecordFilter,
-  RecordSearchInput,
+import {
+  ActorId,
+  MemoryUndoRedoStore,
+  RECORD_REMOVAL_REASON,
+  RecordsDeleted,
+  v2CoreTokens,
+  type ICreateTableCommandInput,
+  type ICreateFieldCommandInput,
+  type ICreateTablesCommandInput,
+  type IDuplicateTableCommandInput,
+  type MemoryEventBus,
+  type IImportCsvCommandInput,
+  type IExecutionContext,
+  type IImportRecordsCommandInput,
+  type IPasteCommandInput,
+  type IUpdateFieldCommandInput,
+  type IUpdateRecordsCommandInput,
+  type RecordFilter,
+  type RecordSearchInput,
 } from '@teable/v2-core';
-import { ActorId, MemoryUndoRedoStore, v2CoreTokens } from '@teable/v2-core';
 import { registerV2ImportServices } from '@teable/v2-import';
+import type { V1TeableDatabase } from '@teable/v2-postgres-schema';
 import express from 'express';
+import type { Kysely } from 'kysely';
 import { createE2eTestContainer, type E2eDbMode } from './createE2eTestContainer';
+
+type DynamicDb = V1TeableDatabase & Record<string, Record<string, unknown>>;
 
 // Default test user that will be used as the actorId for all API requests
 export const TEST_USER = {
@@ -76,6 +86,51 @@ export const TEST_USER = {
   name: 'test',
   email: 'test@e2e.com',
 } as const;
+
+const trashSinkRowId = () => `rtrtest_${crypto.randomUUID()}`;
+
+const installTrashSink = (eventBus: MemoryEventBus, db: Kysely<DynamicDb>): void => {
+  const publish = eventBus.publish.bind(eventBus);
+  const publishMany = eventBus.publishMany.bind(eventBus);
+
+  const sinkDeleted = async (
+    context: IExecutionContext,
+    events: Parameters<MemoryEventBus['publishMany']>[1]
+  ) => {
+    for (const event of events) {
+      if (!(event instanceof RecordsDeleted)) continue;
+      if (event.removalReason === RECORD_REMOVAL_REASON.Archived) continue;
+      if (event.recordIds.length === 0) continue;
+
+      await db
+        .insertInto('record_trash')
+        .values(
+          event.recordIds.map((recordId) => ({
+            id: trashSinkRowId(),
+            table_id: event.tableId.toString(),
+            record_id: recordId.toString(),
+            snapshot: '{}',
+            created_by: context.actorId.toString(),
+            reason: RECORD_REMOVAL_REASON.Deleted,
+          }))
+        )
+        .execute();
+    }
+  };
+
+  // Patch the existing singleton in place: command handlers already hold this
+  // instance, and replacing the DI token would split the published event history.
+  eventBus.publish = async (context, event) => {
+    const result = await publish(context, event);
+    if (result.isOk()) await sinkDeleted(context, [event]);
+    return result;
+  };
+  eventBus.publishMany = async (context, events) => {
+    const result = await publishMany(context, events);
+    if (result.isOk()) await sinkDeleted(context, events);
+    return result;
+  };
+};
 
 export interface SharedTestContext {
   testContainer: IV2NodeTestContainer;
@@ -413,6 +468,7 @@ const initSharedContext = async (
   const testContainer = await time('create-test-container', async () =>
     createE2eTestContainer({ dbMode })
   );
+  installTrashSink(testContainer.eventBus, testContainer.dataDb as Kysely<DynamicDb>);
   const baseId = testContainer.baseId.toString();
 
   // Register import services (CSV, Excel adapters)

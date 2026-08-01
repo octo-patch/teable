@@ -2,9 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { HttpErrorCode, type IGetFieldsQuery } from '@teable/core';
 import type { IGetRecordsRo } from '@teable/openapi';
 import { difference } from 'lodash';
+import { ClsService } from 'nestjs-cls';
 import { CustomHttpException } from '../../custom.exception';
+import type { IClsStore } from '../../types/cls';
 import { FieldService } from '../field/field.service';
 import { RecordService } from '../record/record.service';
+import { ViewOpenApiV2Service } from '../view/open-api/view-open-api-v2.service';
 import { ViewService } from '../view/view.service';
 import type { IShareViewInfo } from './share-auth.service';
 import { isLinkRecordSelectionQuery } from './share-link-query.util';
@@ -13,11 +16,13 @@ import { isLinkRecordSelectionQuery } from './share-link-query.util';
 export class ShareSocketService {
   constructor(
     private readonly viewService: ViewService,
+    private readonly viewOpenApiV2Service: ViewOpenApiV2Service,
     private readonly fieldService: FieldService,
-    private readonly recordService: RecordService
+    private readonly recordService: RecordService,
+    private readonly cls: ClsService<IClsStore>
   ) {}
 
-  getViewDocIdsByQuery(shareInfo: IShareViewInfo) {
+  async getViewDocIdsByQuery(shareInfo: IShareViewInfo) {
     const { tableId, view } = shareInfo;
     if (!view) {
       throw new CustomHttpException('View not found', HttpErrorCode.NOT_FOUND, {
@@ -26,12 +31,16 @@ export class ShareSocketService {
         },
       });
     }
+    if (this.cls.get('useV2')) {
+      await this.viewOpenApiV2Service.getView(tableId, view.id);
+      return { ids: [view.id] };
+    }
     return this.viewService.getDocIdsByQuery(tableId, {
       includeIds: [view.id],
     });
   }
 
-  getViewSnapshotBulk(shareInfo: IShareViewInfo, ids: string[]) {
+  async getViewSnapshotBulk(shareInfo: IShareViewInfo, ids: string[]) {
     const { tableId, view } = shareInfo;
     if (!view) {
       throw new CustomHttpException('View not found', HttpErrorCode.NOT_FOUND, {
@@ -51,6 +60,9 @@ export class ShareSocketService {
           },
         }
       );
+    }
+    if (this.cls.get('useV2')) {
+      return this.viewOpenApiV2Service.getSnapshotBulk(tableId, [view.id]);
     }
     return this.viewService.getSnapshotBulk(tableId, [view.id]);
   }
@@ -133,13 +145,29 @@ export class ShareSocketService {
     );
   }
 
-  async getRecordSnapshotBulk(shareInfo: IShareViewInfo, ids: string[], useQueryModel: boolean) {
+  async getRecordSnapshotBulk(
+    shareInfo: IShareViewInfo,
+    ids: string[],
+    useQueryModel: boolean,
+    projection?: { [fieldNameOrId: string]: boolean }
+  ) {
     const { tableId } = shareInfo;
     await this.validRecordSnapshotPermission(shareInfo, ids);
+    const { ids: allowedFieldIds } = await this.getFieldDocIdsByQuery(shareInfo);
+    const allowedFieldIdSet = new Set(allowedFieldIds);
+    const requestedFieldIds = projection
+      ? Object.entries(projection)
+          .filter(([, included]) => included)
+          .map(([fieldId]) => fieldId)
+      : [];
+    const projectedFieldIds = requestedFieldIds.length
+      ? requestedFieldIds.filter((fieldId) => allowedFieldIdSet.has(fieldId))
+      : allowedFieldIds;
+    const safeProjection = Object.fromEntries(projectedFieldIds.map((fieldId) => [fieldId, true]));
     return this.recordService.getSnapshotBulk(
       tableId,
       ids,
-      undefined,
+      safeProjection,
       undefined,
       undefined,
       useQueryModel

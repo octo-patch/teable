@@ -148,6 +148,10 @@ export class V2RecordsDeletedTableTrashProjection implements IEventHandler<Recor
     if (event.recordSnapshots.length === 0) {
       return ok(undefined);
     }
+    // Archive removals persist their own snapshot (with reason='archived') before deleting.
+    if (event.removalReason === 'archived') {
+      return ok(undefined);
+    }
 
     const buildPayloadAttributes = {
       teableTableId: event.tableId.toString(),
@@ -243,6 +247,10 @@ export class V2RecordsDeletedAttachmentProjection implements IEventHandler<Recor
     event: RecordsDeleted
   ): Promise<Result<void, DomainError>> {
     if (event.recordIds.length === 0) {
+      return ok(undefined);
+    }
+    // Archived records keep their attachment reference rows (see AttachmentListener).
+    if (event.removalReason === 'archived') {
       return ok(undefined);
     }
 

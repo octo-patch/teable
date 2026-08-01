@@ -8,8 +8,24 @@ declare module './ApplyRecordOrdersCommand' {
   interface ApplyRecordOrdersCommand extends IPublicCommand {}
 }
 
+declare module './ApplyViewManualSortCommand' {
+  interface ApplyViewManualSortCommand extends IPublicCommand {}
+}
+
 declare module './ClearCommand' {
   interface ClearCommand extends IPublicCommand {}
+}
+
+declare module './ClickButtonCommand' {
+  interface ClickButtonCommand extends IPublicCommand {}
+}
+
+declare module './SetButtonValueCommand' {
+  interface SetButtonValueCommand extends IPublicCommand {}
+}
+
+declare module './ResetButtonCommand' {
+  interface ResetButtonCommand extends IPublicCommand {}
 }
 
 declare module './CreateBaseCommand' {

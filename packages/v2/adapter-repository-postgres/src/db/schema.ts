@@ -246,6 +246,12 @@ export const ensureV1MetaSchema = async (db: Kysely<V1TeableDatabase>): Promise<
     .addColumn('snapshot', 'text', (col) => col.notNull())
     .addColumn('created_time', 'timestamptz', (col) => col.notNull().defaultTo(sql`now()`))
     .addColumn('created_by', 'text', (col) => col.notNull())
+    .addColumn('reason', 'text', (col) => col.notNull().defaultTo('deleted'))
+    .addColumn('record_created_time', 'timestamptz')
+    .addColumn('record_created_by', 'text')
+    .addColumn('record_last_modified_time', 'timestamptz')
+    .addColumn('record_last_modified_by', 'text')
+    .addColumn('operation_id', 'text')
     .execute();
 
   await db.schema
@@ -254,6 +260,27 @@ export const ensureV1MetaSchema = async (db: Kysely<V1TeableDatabase>): Promise<
     .on('record_trash')
     .columns(['table_id', 'record_id'])
     .execute();
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS "record_trash_archived_removed_idx"
+      ON "record_trash"("table_id", "created_time" DESC, "id" DESC) WHERE "reason" = 'archived'
+  `.execute(db);
+  await sql`
+    CREATE INDEX IF NOT EXISTS "record_trash_archived_created_idx"
+      ON "record_trash"("table_id", "record_created_time") WHERE "reason" = 'archived'
+  `.execute(db);
+  await sql`
+    CREATE INDEX IF NOT EXISTS "record_trash_archived_creator_idx"
+      ON "record_trash"("table_id", "record_created_by") WHERE "reason" = 'archived'
+  `.execute(db);
+  await sql`
+    CREATE INDEX IF NOT EXISTS "record_trash_archived_modified_idx"
+      ON "record_trash"("table_id", "record_last_modified_time") WHERE "reason" = 'archived'
+  `.execute(db);
+  await sql`
+    CREATE INDEX IF NOT EXISTS "record_trash_archived_modifier_idx"
+      ON "record_trash"("table_id", "record_last_modified_by") WHERE "reason" = 'archived'
+  `.execute(db);
 
   await db.schema
     .createTable('computed_update_outbox')

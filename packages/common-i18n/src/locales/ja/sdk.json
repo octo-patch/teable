@@ -386,6 +386,8 @@
       "tableTrashRead": "テーブルのごみ箱を読む",
       "tableTrashUpdate": "テーブルのごみ箱を更新",
       "tableTrashReset": "テーブルのごみ箱をリセット",
+      "tableArchiveRead": "テーブルのアーカイブを読む",
+      "tableArchiveManage": "テーブルのアーカイブを管理",
       "viewCreate": "ビューを作成",
       "viewDelete": "ビューを削除",
       "viewRead": "ビューを読み取り",
@@ -401,6 +403,7 @@
       "recordRead": "レコードの読み取り",
       "recordUpdate": "レコードの更新",
       "recordCopy": "Copy record",
+      "recordArchive": "レコードをアーカイブ",
       "automationCreate": "オートメーションの作成",
       "automationDelete": "オートメーションの削除",
       "automationRead": "オートメーションの読み取り",
@@ -926,15 +929,18 @@
       "nameMaxLength": "名前が長すぎます。最大 {{max}} 文字です。",
       "descriptionMaxLength": "説明が長すぎます。最大 {{max}} 文字です。"
     },
-    "validation": {
-      "field": {
-        "unique": "フィールドには一意の値が必要です"
-      }
-    },
     "custom": {
       "fieldValueNotNull": "\"{{tableName}}\" フィールド \"{{fieldName}}\" は空の値を許可しません。送信する前に完全に入力してください。",
       "fieldValueDuplicate": "\"{{tableName}}\" フィールド \"{{fieldName}}\" は重複する値を許可しません。送信する前に一意の値を入力してください。",
+      "recordFieldValueNotNull": "フィールド \"{{fieldName}}\" は空の値を許可しません。送信する前に完全に入力してください。",
+      "recordFieldValueDuplicate": "フィールド \"{{fieldName}}\" は重複する値を許可しません。送信する前に一意の値を入力してください。",
       "linkFieldValueDuplicate": "\"{{fieldName}}\" フィールドは同じレコードに複数の関連付けを許可しません。",
+      "linkBatchDuplicate": "関連付けできません：同じバッチ内で、このレコードはすでに別のレコードに関連付けられています。一対多の関係では、各子レコードは1つの親レコードにのみ属できます。",
+      "linkOneManyDuplicate": "関連付けできません：このレコードはすでに別のレコードに関連付けられています。一対多の関係では、各子レコードは1つの親レコードにのみ属できます。",
+      "linkOneOneDuplicate": "関連付けできません：対象レコードは一対一の関係ですでに別のレコードに関連付けられています。",
+      "fieldMaxColumnLimit": "テーブル「{{tableName}}」には最大 {{maxFieldCount}} 個のフィールドしか作成できません。",
+      "fieldRequiredExistingValues": "既存のレコードに空の値があるため、フィールド「{{fieldName}}」を必須にできません。",
+      "fieldUniqueExistingValues": "既存のレコードに重複する値があるため、フィールド「{{fieldName}}」を一意にできません。",
       "requestTimeout": "操作範囲が大きすぎます。範囲を縮小して再試行してください。",
       "searchTimeOut": "検索が期限切れ、検索範囲を狭めて再試行してください。",
       "dependencyNodeRequire": "依存ノードがテストされていません。前のノードをテストしてください。",

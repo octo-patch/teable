@@ -1,3 +1,4 @@
+export * from './base-entry-map';
 export * from './create';
 export * from './delete';
 export * from './get-list';

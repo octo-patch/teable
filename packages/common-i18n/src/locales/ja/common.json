@@ -59,9 +59,6 @@
     "refresh": "更新",
     "login": "ログイン",
     "useTemplate": "テンプレートを使用",
-    "copyToMySpace": "Copy to my space",
-    "saveToMySpace": "Save to my space",
-    "supportSaveCopy": "Support saving a copy",
     "backToSpace": "スペースに戻る",
     "switchBase": "ベースを切り替え",
     "continue": "続行",
@@ -549,6 +546,20 @@
     "viewPricing": "料金を見る",
     "billable": "課金対象",
     "billableByAuthorityMatrix": "権限マトリックスによって生成された課金",
+    "seatConfirm": {
+      "title": "この招待によりサブスクリプション料金が増加します",
+      "roleChangeTitle": "このロール変更によりサブスクリプション料金が増加します",
+      "matrixTitle": "メンバーの追加によりサブスクリプション料金が増加します",
+      "inviteDesc_one": "招待した {{count}} 人のメンバーは {{role}} ロールで参加し、サブスクリプションの {{count}} 席を使用するため、料金がその分増加します。閲覧やコメントのみでよい場合は、無料の「閲覧者」または「解説者」ロールをお選びください。",
+      "inviteDesc_other": "招待した {{count}} 人のメンバーは {{role}} ロールで参加し、サブスクリプションの {{count}} 席を使用するため、料金がその分増加します。閲覧やコメントのみでよい場合は、無料の「閲覧者」または「解説者」ロールをお選びください。",
+      "linkDesc": "このリンクから参加したメンバーには {{role}} ロールが付与され、1 人につき 1 席を使用するため、参加人数に応じて料金が増加します。閲覧やコメントのみでよい場合は、無料の「閲覧者」または「解説者」ロールをお選びください。",
+      "roleChangeDesc": "{{role}} に変更すると、このメンバーはサブスクリプションの 1 席を使用し、料金がその分増加します。",
+      "matrixDesc": "このメンバーは現在無料ロール（閲覧者/解説者）です。権限マトリックスに追加するとサブスクリプションの 1 席を使用し、料金がその分増加します。",
+      "seatLimitTitle": "ライセンスシートが不足しています",
+      "seatLimitDesc": "このインスタンスはライセンスシート {{seatLimit}} 席中 {{seats}} 席を使用しており、この操作に必要な残りシートがありません。管理者に連絡して追加シートを購入してください。閲覧やコメントのみでよい場合は、無料の「閲覧者」または「解説者」ロールをご利用ください。",
+      "seatLimitConfirm": "わかりました",
+      "confirmInvite": "確認して招待"
+    },
     "licenseExpiredGracePeriod": "セルフホスト版ライセンスの有効期限が切れました。{{expiredTime}}に無料プランへダウングレードされ、プレミアム機能が利用できなくなります。完全な機能を維持するため、速やかにライセンスを更新してください。",
     "licenseAutoFetchFailed": "ライセンスの自動更新に失敗しました。ダウングレードまでの猶予期間は残り {{days}} 日です。",
     "licenseAutoFetchRetryFailed": "自動更新が再び失敗しました。Teable サーバーへの接続を確認するか、ライセンスを手動で更新してください。",
@@ -1298,10 +1309,10 @@
     }
   },
   "changelog": {
-    "newUpdate": "7月28日アップデート",
-    "title": "AIエージェント向けTeable Skill",
-    "url": "https://help.teable.ai/en/changelog#jul-28-2026",
-    "id": "changelog-2026-07-28-teable-skill-for-ai-agents"
+    "newUpdate": "7月31日アップデート",
+    "title": "TeableでGPT 5.6が値下げ",
+    "url": "https://help.teable.ai/en/changelog#jul-31-2026",
+    "id": "changelog-2026-07-31-gpt-5-6-price-cuts-in-teable"
   },
   "resourceDescription": {
     "addDescription": "説明を追加",

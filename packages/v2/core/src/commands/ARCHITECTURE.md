@@ -42,6 +42,9 @@ Declaration: If the folder I belong to changes, please update me, especially cor
 - `DuplicateRecordsStreamHandler.ts` - Role: command handler; Purpose: expose bulk row duplication as an async progress stream.
 - `DeleteFieldCommand.ts` - Role: command DTO + schema; Purpose: validate inputs for deleting a field.
 - `DeleteFieldHandler.ts` - Role: command handler; Purpose: remove field metadata/schema and publish events.
+- `DeleteViewCommand.ts` - Role: command DTO + schema; Purpose: validate Table-owned View deletion.
+- `DeleteViewHandler.ts` - Role: command handler; Purpose: lock and load Table aggregate roots, persist
+  View removal and cross-Table Link filter cleanup, then publish events after commit.
 - `FieldValidation.ts` - Role: helper; Purpose: decide notNull/unique support by field type.
 - `DeleteTableCommand.ts` - Role: command DTO + schema; Purpose: validate inputs for deletion.
 - `DeleteTableHandler.ts` - Role: command handler; Purpose: delete table state/schema and publish events.
@@ -54,6 +57,13 @@ Declaration: If the folder I belong to changes, please update me, especially cor
 - `ImportDotTeaStructureHandler.ts` - Role: command handler; Purpose: import dottea structure tables.
 - `RenameTableCommand.ts` - Role: command DTO + schema; Purpose: validate inputs for renaming.
 - `RenameTableHandler.ts` - Role: command handler; Purpose: persist table rename and publish events.
+- `UpdateViewSortCommand.ts` - Role: command DTO + schema; Purpose: validate the public View sort
+  contract for a Table-owned View.
+- `UpdateViewSortHandler.ts` - Role: command handler; Purpose: orchestrate Table aggregate mutation,
+  View operation policy, persistence, events, and undo/redo for sort updates.
+- `ApplyViewManualSortCommand.ts` - Role: command DTO; Purpose: validate View manual-sort inputs.
+- `ApplyViewManualSortHandler.ts` - Role: command handler; Purpose: prepare aggregate-declared
+  row-order storage, persist View state, materialize record order, and append View history.
 - `TableFieldSpecs.ts` - Role: parsing helpers; Purpose: shared field input schema + spec builders.
 - `UpdateRecordCommand.ts` - Role: command DTO + schema; Purpose: validate inputs for updating a record.
 - `UpdateRecordHandler.ts` - Role: command handler; Purpose: update record, persist, publish.

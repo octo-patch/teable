@@ -32,6 +32,7 @@ import { useTranslation } from 'next-i18next';
 import { useState, useMemo, useCallback } from 'react';
 import { useLocalStorage } from 'react-use';
 import { spaceConfig } from '@/features/i18n/space.config';
+import { useBaseEntryMap } from '../../hooks/useBaseEntryMap';
 import { BaseNodeProvider } from '../base/base-node/BaseNodeProvider';
 import { getNodeUrl } from '../base/base-node/hooks';
 import { BaseNodeTree } from '../base/base-side-bar/BaseNodeTree';
@@ -79,6 +80,9 @@ export const BaseList = (props: IBaseListProps) => {
   );
 
   const allBaseList = useBaseList();
+  // warm the entry-URL map for this space's bases so clicking a card
+  // navigates straight to the final table/view URL (consumed in useEnterBase)
+  useBaseEntryMap(spaceId);
   const { map: lastVisitBaseMap = {} } = useLastVisitBase();
 
   const { data: space } = useQuery({

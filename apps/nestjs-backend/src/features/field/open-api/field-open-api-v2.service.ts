@@ -12,6 +12,7 @@ import {
   type IConvertFieldRo,
   type IFieldRo,
   type IFieldVo,
+  type IGetFieldsQuery,
   type IUpdateFieldRo,
 } from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
@@ -38,12 +39,14 @@ import {
   FieldId,
   type ICommandBus,
   type IExecutionContext,
+  type IQueryBus,
   type ISpan,
-  type ITableMapper,
   type ITracer,
   extractLookupDisplayOptionsPatch,
   LinkFieldConfig,
   LinkRelationship,
+  ListFieldsQuery,
+  type ListFieldsResult,
   stripLookupFormulaExecutableOptions,
   TableId,
   type Table,
@@ -55,10 +58,12 @@ import { instanceToPlain } from 'class-transformer';
 import { ClsService } from 'nestjs-cls';
 import { CustomHttpException, getDefaultCodeByStatus } from '../../../custom.exception';
 import type { IClsStore } from '../../../types/cls';
+import { isNotHiddenField } from '../../../utils/is-not-hidden-field';
 import type { IOpsMap } from '../../calculation/utils/compose-maps';
 import { DataLoaderService } from '../../data-loader/data-loader.service';
 import { V2ContainerService } from '../../v2/v2-container.service';
 import { V2ExecutionContextFactory } from '../../v2/v2-execution-context.factory';
+import { throwV2Error } from '../../v2/v2-http-error';
 import { FieldSupplementService } from '../field-calculate/field-supplement.service';
 import { FieldOpenApiService } from './field-open-api.service';
 
@@ -67,10 +72,6 @@ const internalServerError = 'Internal server error';
 type ConvertFieldExecutionOptions = {
   suppressWindowId?: boolean;
   undoRedoMode?: 'undo' | 'redo' | 'normal';
-};
-
-type ITableDtoWithFields = {
-  fields: ReadonlyArray<Record<string, unknown>>;
 };
 
 type IPreparedLegacyCreateField = {
@@ -219,22 +220,6 @@ export class FieldOpenApiV2Service {
     this.dataLoaderService.field.invalidateTables(ids);
   }
 
-  private throwV2Error(
-    error: {
-      code: string;
-      message: string;
-      tags?: ReadonlyArray<string>;
-      details?: Readonly<Record<string, unknown>>;
-    },
-    status: number
-  ): never {
-    throw new CustomHttpException(error.message, getDefaultCodeByStatus(status), {
-      domainCode: error.code,
-      domainTags: error.tags,
-      details: error.details,
-    });
-  }
-
   private normalizeFieldVo(field: unknown): IFieldVo {
     const vo = instanceToPlain(field, { excludePrefixes: ['_'] }) as IFieldVo;
     const raw = vo as Record<string, unknown>;
@@ -260,6 +245,28 @@ export class FieldOpenApiV2Service {
         raw.options = opts;
         delete raw.config;
       }
+    }
+
+    // Translate the flattened conditional-lookup DTO shape produced by
+    // mapFieldToDto ({ type: innerType, isLookup, conditionalLookupOptions })
+    // to the v1 API format ({ isConditionalLookup, lookupOptions }).
+    if (raw.conditionalLookupOptions && typeof raw.conditionalLookupOptions === 'object') {
+      const conditionalOptions = raw.conditionalLookupOptions as Record<string, unknown>;
+      const condition = conditionalOptions.condition as Record<string, unknown> | undefined;
+      const lookupOptions: Record<string, unknown> = {};
+      if (conditionalOptions.foreignTableId != null)
+        lookupOptions.foreignTableId = conditionalOptions.foreignTableId;
+      if (conditionalOptions.lookupFieldId != null)
+        lookupOptions.lookupFieldId = conditionalOptions.lookupFieldId;
+      if (condition) {
+        if (condition.filter !== undefined) lookupOptions.filter = condition.filter;
+        if (condition.sort !== undefined) lookupOptions.sort = condition.sort;
+        if (condition.limit !== undefined) lookupOptions.limit = condition.limit;
+      }
+      vo.isLookup = true;
+      vo.isConditionalLookup = true;
+      raw.lookupOptions = lookupOptions;
+      delete raw.conditionalLookupOptions;
     }
 
     // Translate v2 conditionalLookup DTO to v1 API format.
@@ -487,37 +494,121 @@ export class FieldOpenApiV2Service {
     );
   }
 
+  private async listDomainFields(
+    tableId: string,
+    viewId?: string,
+    context?: IExecutionContext
+  ): Promise<{ result: ListFieldsResult; context: IExecutionContext }> {
+    const container = await this.v2ContainerService.getContainerForTable(tableId);
+    const queryBus = container.resolve<IQueryBus>(v2CoreTokens.queryBus);
+    const queryContext = context ?? (await this.v2ContextFactory.createContext(container));
+    const queryResult = ListFieldsQuery.create({ tableId, viewId });
+    if (queryResult.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(queryResult.error),
+        mapDomainErrorToHttpStatus(queryResult.error)
+      );
+    }
+
+    const result = await queryBus.execute<ListFieldsQuery, ListFieldsResult>(
+      queryContext,
+      queryResult.value
+    );
+    if (result.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(result.error),
+        mapDomainErrorToHttpStatus(result.error)
+      );
+    }
+    return { result: result.value, context: queryContext };
+  }
+
+  async getFields(tableId: string, query: IGetFieldsQuery = {}): Promise<IFieldVo[]> {
+    const { result, context } = await this.listDomainFields(tableId, query.viewId);
+    const fieldDtoById = new Map(
+      result.fields.map((field) => {
+        const dto = mapFieldToDto(field, result.primaryFieldId);
+        if (dto.isErr()) {
+          throw new HttpException(dto.error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        return [field.id().toString(), dto.value as Record<string, unknown>] as const;
+      })
+    );
+    const fields = await Promise.all(
+      result.fields.map(async (field) => {
+        const vo = this.normalizeFieldVo(fieldDtoById.get(field.id().toString()));
+        this.enrichLookupLinkMetadata(vo, (linkFieldId) => fieldDtoById.get(linkFieldId));
+        await this.hydrateLookupFieldVo(vo, context);
+        return vo;
+      })
+    );
+
+    if (query.projection) {
+      const fieldById = new Map(fields.map((field) => [field.id, field] as const));
+      return query.projection
+        .map((fieldId) => fieldById.get(fieldId))
+        .filter((field): field is IFieldVo => field != null);
+    }
+
+    const view = result.view;
+    if (!view) return fields;
+    const columnMetaResult = view.columnMeta();
+    if (columnMetaResult.isErr()) {
+      throwV2Error(
+        mapDomainErrorToHttpError(columnMetaResult.error),
+        mapDomainErrorToHttpStatus(columnMetaResult.error)
+      );
+    }
+    const columnMeta = columnMetaResult.value.toDto();
+    const viewProjection = {
+      type: view.type().toString(),
+      options: view.options(),
+      columnMeta,
+    } as Parameters<typeof isNotHiddenField>[1];
+    const visibleFields = query.filterHidden
+      ? fields.filter((field) => isNotHiddenField(field.id, viewProjection))
+      : fields;
+
+    return [...visibleFields].sort((left, right) => {
+      const leftOrder = columnMeta[left.id]?.order;
+      const rightOrder = columnMeta[right.id]?.order;
+      if (leftOrder == null && rightOrder == null) return 0;
+      if (leftOrder == null) return 1;
+      if (rightOrder == null) return -1;
+      return leftOrder - rightOrder;
+    });
+  }
+
   private async getFieldFromV2(
     tableId: string,
     fieldId: string,
     context?: IExecutionContext
   ): Promise<IFieldVo> {
-    const container = await this.v2ContainerService.getContainerForTable(tableId);
-    const tableQueryService = container.resolve<TableQueryService>(v2CoreTokens.tableQueryService);
-    const tableMapper = container.resolve<ITableMapper>(v2CoreTokens.tableMapper);
-    const tableIdResult = TableId.create(tableId);
-    if (tableIdResult.isErr()) {
-      throw new HttpException('Invalid table id', HttpStatus.BAD_REQUEST);
+    const { result, context: queryContext } = await this.listDomainFields(
+      tableId,
+      undefined,
+      context
+    );
+    const field = result.fields.find((candidate) => candidate.id().toString() === fieldId);
+    if (!field) {
+      throw new HttpException(`Field ${fieldId} not found`, HttpStatus.NOT_FOUND);
     }
-
-    const queryContext = context ?? (await this.v2ContextFactory.createContext(container));
-    const tableResult = await tableQueryService.getById(queryContext, tableIdResult.value);
-    if (tableResult.isErr()) {
-      const errMsg = tableResult.error.message ?? 'Table not found';
-      const isNotFound =
-        tableResult.error.code === 'table.not_found' || errMsg.includes('not found');
-      throw new HttpException(
-        `v2 getFieldFromV2: ${errMsg}`,
-        isNotFound ? HttpStatus.NOT_FOUND : HttpStatus.INTERNAL_SERVER_ERROR
-      );
+    const fieldDtoById = new Map<string, Record<string, unknown>>();
+    for (const candidate of result.fields) {
+      const dtoResult = mapFieldToDto(candidate, result.primaryFieldId);
+      if (dtoResult.isErr()) {
+        throw new HttpException(dtoResult.error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+      }
+      fieldDtoById.set(candidate.id().toString(), dtoResult.value as Record<string, unknown>);
     }
-
-    const tableDtoResult = tableMapper.toDTO(tableResult.value);
-    if (tableDtoResult.isErr()) {
-      throw new HttpException(tableDtoResult.error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+    const fieldDto = fieldDtoById.get(fieldId);
+    if (!fieldDto) {
+      throw new HttpException(`Field ${fieldId} not found`, HttpStatus.NOT_FOUND);
     }
-
-    return this.extractFieldVoFromTableDto(tableDtoResult.value, fieldId, queryContext);
+    const vo = this.normalizeFieldVo(fieldDto);
+    this.enrichLookupLinkMetadata(vo, (linkFieldId) => fieldDtoById.get(linkFieldId));
+    await this.hydrateLookupFieldVo(vo, queryContext);
+    return vo;
   }
 
   private mapDomainFieldToDto(table: Table, field: Field): Record<string, unknown> {
@@ -641,27 +732,6 @@ export class FieldOpenApiV2Service {
     if (vo.options == null) {
       vo.options = {};
     }
-  }
-
-  private async extractFieldVoFromTableDto(
-    tableDto: ITableDtoWithFields,
-    fieldId: string,
-    queryContext?: IExecutionContext
-  ): Promise<IFieldVo> {
-    const field = tableDto.fields.find((item) => item.id === fieldId);
-    if (!field) {
-      throw new HttpException(`Field ${fieldId} not found`, HttpStatus.NOT_FOUND);
-    }
-
-    const vo = this.normalizeFieldVo(field);
-
-    this.enrichLookupLinkMetadata(vo, (linkFieldId) =>
-      tableDto.fields.find((f) => f.id === linkFieldId)
-    );
-
-    await this.hydrateLookupFieldVo(vo, queryContext);
-
-    return vo;
   }
 
   private async extractFieldVoFromDomainTable(
@@ -947,8 +1017,11 @@ export class FieldOpenApiV2Service {
     const cellValueType = raw.cellValueType;
     const isMultipleCellValue = raw.isMultipleCellValue;
 
+    // The v2 command validates the pair together — always forward both;
+    // a lone cellValueType is rejected with 'requires cellValueType and
+    // isMultipleCellValue'.
     if (typeof cellValueType === 'string' && typeof isMultipleCellValue === 'boolean') {
-      return isMultipleCellValue ? { cellValueType, isMultipleCellValue } : { cellValueType };
+      return { cellValueType, isMultipleCellValue };
     }
     return {};
   }
@@ -1421,7 +1494,7 @@ export class FieldOpenApiV2Service {
     );
 
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -1437,7 +1510,7 @@ export class FieldOpenApiV2Service {
     );
 
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -1517,7 +1590,7 @@ export class FieldOpenApiV2Service {
     });
 
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(commandResult.error),
         mapDomainErrorToHttpStatus(commandResult.error)
       );
@@ -1529,7 +1602,7 @@ export class FieldOpenApiV2Service {
     );
 
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         mapDomainErrorToHttpError(result.error),
         mapDomainErrorToHttpStatus(result.error)
       );
@@ -1645,7 +1718,7 @@ export class FieldOpenApiV2Service {
 
     if (!(duplicateResult.status === 200 && duplicateResult.body.ok)) {
       if (!duplicateResult.body.ok) {
-        this.throwV2Error(duplicateResult.body.error, duplicateResult.status);
+        throwV2Error(duplicateResult.body.error, duplicateResult.status);
       }
       throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
     }
@@ -1694,7 +1767,7 @@ export class FieldOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -1727,7 +1800,7 @@ export class FieldOpenApiV2Service {
       fieldIds,
     });
     if (commandResult.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         {
           code: commandResult.error.code,
           message: commandResult.error.message,
@@ -1740,7 +1813,7 @@ export class FieldOpenApiV2Service {
 
     const result = await commandBus.execute(context, commandResult.value);
     if (result.isErr()) {
-      this.throwV2Error(
+      throwV2Error(
         {
           code: result.error.code,
           message: result.error.message,
@@ -1783,7 +1856,7 @@ export class FieldOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -1854,7 +1927,7 @@ export class FieldOpenApiV2Service {
     }
 
     if (!result.body.ok) {
-      this.throwV2Error(result.body.error, result.status);
+      throwV2Error(result.body.error, result.status);
     }
 
     throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -1903,7 +1976,7 @@ export class FieldOpenApiV2Service {
 
         if (!(result.status === 200 && result.body.ok)) {
           if (!result.body.ok) {
-            this.throwV2Error(result.body.error, result.status);
+            throwV2Error(result.body.error, result.status);
           }
           throw new HttpException(internalServerError, HttpStatus.INTERNAL_SERVER_ERROR);
         }
@@ -2025,7 +2098,13 @@ export class FieldOpenApiV2Service {
           ? { isMultipleCellValue: roRecord.isMultipleCellValue }
           : typeof currentIsMultipleCellValue === 'boolean'
             ? { isMultipleCellValue: currentIsMultipleCellValue }
-            : {}),
+            : typeof roRecord.cellValueType === 'string' ||
+                (currentCellValueType && !shouldSkipFormulaStringFallback)
+              ? // The v1 vo omits isMultipleCellValue when false; the v2 command
+                // validates the result-type pair together, so make the default
+                // explicit whenever a cellValueType is forwarded.
+                { isMultipleCellValue: false }
+              : {}),
         options: {
           ...(lookupOpts && shouldUpdateCondition
             ? {

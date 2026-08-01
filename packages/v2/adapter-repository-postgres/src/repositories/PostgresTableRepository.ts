@@ -22,9 +22,17 @@ import {
   TableWhereVisitor,
 } from './visitors/TableWhereVisitor';
 
+class TableUpdateRollback extends Error {
+  constructor(readonly domainError: DomainError) {
+    super('table update rolled back');
+  }
+}
+
 const formatSpecDetails = (specInfo: TableWhereSpecInfo): string => {
   const parts: string[] = [];
   if (specInfo.tableId) parts.push(`tableId=${specInfo.tableId}`);
+  if (specInfo.viewId) parts.push(`viewId=${specInfo.viewId}`);
+  if (specInfo.viewIds) parts.push(`viewIds=${specInfo.viewIds.join(',')}`);
   if (specInfo.incomingReferenceToTableId) {
     parts.push(`incomingReferenceToTableId=${specInfo.incomingReferenceToTableId}`);
   }
@@ -89,6 +97,9 @@ const tableProvisionStateToOperationStatus = (
 
 const shouldFilterDeletedChildren = (state: core.TableQueryState): boolean =>
   state === 'active' || state === 'activeWithPending' || state === 'activeAnyProvision';
+
+const toIsoTimestamp = (value: Date | string): string =>
+  value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
 const jsonbValue = (value: unknown): ReturnType<typeof sql> => {
   if (value === undefined) {
@@ -187,17 +198,19 @@ export class PostgresTableRepository implements core.ITableRepository {
         }),
         id: v.id,
         name: v.name,
-        description: null,
+        description: v.description ?? null,
         table_id: dto.id,
         type: v.type,
         options: v.options === undefined ? null : JSON.stringify(v.options),
-        order: i + 1,
+        // v1 assigns 0-based view orders; keep parity so export order
+        // normalization round-trips (see BaseExportService.generateViewConfig).
+        order: v.order ?? i,
         version: 1,
         column_meta: JSON.stringify(v.columnMeta),
-        is_locked: null,
-        enable_share: null,
-        share_id: null,
-        share_meta: null,
+        is_locked: v.isLocked ?? null,
+        enable_share: v.enableShare ?? null,
+        share_id: v.shareId ?? null,
+        share_meta: v.shareMeta === undefined ? null : JSON.stringify(v.shareMeta),
         created_time: now,
         last_modified_time: now,
         deleted_time: null,
@@ -516,17 +529,17 @@ export class PostgresTableRepository implements core.ITableRepository {
             }),
             id: view.id,
             name: view.name,
-            description: null,
+            description: view.description ?? null,
             table_id: dto.id,
             type: view.type,
             options: view.options === undefined ? null : JSON.stringify(view.options),
-            order: index + 1,
+            order: view.order ?? index,
             version: 1,
             column_meta: JSON.stringify(view.columnMeta),
-            is_locked: null,
-            enable_share: null,
-            share_id: null,
-            share_meta: null,
+            is_locked: view.isLocked ?? null,
+            enable_share: view.enableShare ?? null,
+            share_id: view.shareId ?? null,
+            share_meta: view.shareMeta === undefined ? null : JSON.stringify(view.shareMeta),
             created_time: now,
             last_modified_time: now,
             deleted_time: null,
@@ -583,7 +596,7 @@ export class PostgresTableRepository implements core.ITableRepository {
   async findOne(
     context: core.IExecutionContext,
     spec: core.ISpecification<core.Table, core.ITableSpecVisitor>,
-    options?: Pick<core.TableFindOptions, 'state'>
+    options?: core.TableFindOneOptions
   ): Promise<Result<core.Table, DomainError>> {
     const visitor = new TableWhereVisitor(options?.state);
     const acceptResult = spec.accept(visitor);
@@ -601,6 +614,12 @@ export class PostgresTableRepository implements core.ITableRepository {
       };
       if (specInfo.tableId) {
         attributes[core.TeableSpanAttributes.TABLE_ID] = specInfo.tableId;
+      }
+      if (specInfo.viewId) {
+        attributes['teable.view_id'] = specInfo.viewId;
+      }
+      if (specInfo.viewIds) {
+        attributes['teable.view_ids'] = specInfo.viewIds.join(',');
       }
       if (specInfo.incomingReferenceToTableId) {
         attributes['teable.incoming_reference_to_table_id'] = specInfo.incomingReferenceToTableId;
@@ -622,6 +641,14 @@ export class PostgresTableRepository implements core.ITableRepository {
 
     try {
       const db = resolvePostgresDbOrTx(this.db, context, 'meta');
+      if (options?.lock === 'forUpdate') {
+        await db
+          .selectFrom('table_meta')
+          .select('id')
+          .where((eb) => whereFactory(eb))
+          .forUpdate()
+          .executeTakeFirst();
+      }
       const effectiveState = options?.state ?? 'active';
       const fieldsLateral = db
         .selectNoFrom((eb) => [
@@ -677,9 +704,37 @@ export class PostgresTableRepository implements core.ITableRepository {
             (() => {
               let query = eb
                 .selectFrom('view')
-                .select(['id', 'name', 'type', 'options', 'column_meta', 'sort', 'filter', 'group'])
+                .select([
+                  'id',
+                  'name',
+                  'description',
+                  'type',
+                  'options',
+                  'order',
+                  'version',
+                  'column_meta',
+                  'sort',
+                  'filter',
+                  'group',
+                  'is_locked',
+                  'enable_share',
+                  'share_id',
+                  'share_meta',
+                  'created_time',
+                  'last_modified_time',
+                  'created_by',
+                  'last_modified_by',
+                ])
                 .where(sql<boolean>`${sql.ref('view.table_id')} = ${sql.ref('table_meta.id')}`)
                 .orderBy('order');
+              if (specInfo.viewId) {
+                query = query.where('id', '=', specInfo.viewId);
+              } else if (specInfo.viewIds) {
+                query =
+                  specInfo.viewIds.length > 0
+                    ? query.where('id', 'in', specInfo.viewIds)
+                    : query.where(sql<boolean>`false`);
+              }
               if (shouldFilterDeletedChildren(effectiveState)) {
                 query = query.where('deleted_time', 'is', null);
               } else if (effectiveState === 'deleted') {
@@ -740,6 +795,7 @@ export class PostgresTableRepository implements core.ITableRepository {
     const whereResult = visitor.where();
     if (whereResult.isErr()) return err(whereResult.error);
     const whereFactory = whereResult.value;
+    const specInfo = visitor.describe();
 
     try {
       const db = resolvePostgresDbOrTx(this.db, context, 'meta');
@@ -795,9 +851,37 @@ export class PostgresTableRepository implements core.ITableRepository {
             (() => {
               let query = eb
                 .selectFrom('view')
-                .select(['id', 'name', 'type', 'options', 'column_meta', 'sort', 'filter', 'group'])
+                .select([
+                  'id',
+                  'name',
+                  'description',
+                  'type',
+                  'options',
+                  'order',
+                  'version',
+                  'column_meta',
+                  'sort',
+                  'filter',
+                  'group',
+                  'is_locked',
+                  'enable_share',
+                  'share_id',
+                  'share_meta',
+                  'created_time',
+                  'last_modified_time',
+                  'created_by',
+                  'last_modified_by',
+                ])
                 .where(sql<boolean>`${sql.ref('view.table_id')} = ${sql.ref('table_meta.id')}`)
                 .orderBy('order');
+              if (specInfo.viewId) {
+                query = query.where('id', '=', specInfo.viewId);
+              } else if (specInfo.viewIds) {
+                query =
+                  specInfo.viewIds.length > 0
+                    ? query.where('id', 'in', specInfo.viewIds)
+                    : query.where(sql<boolean>`false`);
+              }
               if (shouldFilterDeletedChildren(effectiveState)) {
                 query = query.where('deleted_time', 'is', null);
               } else if (effectiveState === 'deleted') {
@@ -915,6 +999,33 @@ export class PostgresTableRepository implements core.ITableRepository {
     table: core.Table,
     mutateSpec: core.ISpecification<core.Table, core.ITableSpecVisitor>
   ): Promise<Result<core.TableUpdatePersistResult | void, DomainError>> {
+    // The FOR UPDATE view-version guard in executeUpdateOne only holds until the
+    // statement ends unless a transaction is open; without an ambient meta
+    // transaction, open one so validate + update + version reload are atomic.
+    const ambientTx = getPostgresTransaction<V1TeableDatabase>(context, 'meta');
+    if (ambientTx) {
+      return this.executeUpdateOne(ambientTx, context, table, mutateSpec);
+    }
+    try {
+      return await this.db.transaction().execute(async (trx) => {
+        const result = await this.executeUpdateOne(trx, context, table, mutateSpec);
+        if (result.isErr()) throw new TableUpdateRollback(result.error);
+        return result;
+      });
+    } catch (error) {
+      if (error instanceof TableUpdateRollback) return err(error.domainError);
+      return err(
+        domainError.infrastructure({ message: `Failed to update table: ${describeError(error)}` })
+      );
+    }
+  }
+
+  private async executeUpdateOne(
+    db: Kysely<V1TeableDatabase> | Transaction<V1TeableDatabase>,
+    context: core.IExecutionContext,
+    table: core.Table,
+    mutateSpec: core.ISpecification<core.Table, core.ITableSpecVisitor>
+  ): Promise<Result<core.TableUpdatePersistResult | void, DomainError>> {
     const now = new Date();
     const actorId = context.actorId.toString();
     const tableId = table.id().toString();
@@ -926,7 +1037,6 @@ export class PostgresTableRepository implements core.ITableRepository {
         eb.eb('deleted_time', 'is', null),
       ]);
 
-    const db = resolvePostgresDbOrTx(this.db, context, 'meta');
     try {
       const updateVisitor = new TableMetaUpdateVisitor({
         db,
@@ -942,13 +1052,23 @@ export class PostgresTableRepository implements core.ITableRepository {
       if (statementsResult.isErr()) return err(statementsResult.error);
       if (statementsResult.value.length === 0) return ok(undefined);
 
+      const fieldVersionTouchOrder = updateVisitor.fieldVersionTouchOrder();
+      const viewVersionTouchOrder = updateVisitor.viewVersionTouchOrder();
+      const viewVersionValidationResult = await this.lockAndValidateViewVersions(
+        db,
+        table,
+        tableId,
+        viewVersionTouchOrder
+      );
+      if (viewVersionValidationResult.isErr()) {
+        return err(viewVersionValidationResult.error);
+      }
+
       await executeCompiledQueries(
         db,
         statementsResult.value.map((statement) => statement.compile())
       );
 
-      const fieldVersionTouchOrder = updateVisitor.fieldVersionTouchOrder();
-      const viewVersionTouchOrder = updateVisitor.viewVersionTouchOrder();
       if (fieldVersionTouchOrder.length === 0 && viewVersionTouchOrder.length === 0) {
         return ok(undefined);
       }
@@ -994,6 +1114,74 @@ export class PostgresTableRepository implements core.ITableRepository {
         domainError.infrastructure({ message: `Failed to update table: ${describeError(error)}` })
       );
     }
+  }
+
+  private async lockAndValidateViewVersions(
+    db: Kysely<V1TeableDatabase> | Transaction<V1TeableDatabase>,
+    table: core.Table,
+    tableId: string,
+    viewIds: ReadonlyArray<string>
+  ): Promise<Result<void, DomainError>> {
+    const expectedVersions = new Map<string, number>();
+    for (const viewId of [...new Set(viewIds)].sort()) {
+      const viewResult = table.getViewById(viewId);
+      if (viewResult.isErr()) {
+        // A deleted child is absent from the mutated aggregate, so it cannot
+        // participate in validation through a rehydrated ViewVersion.
+        continue;
+      }
+      const versionResult = viewResult.value.version();
+      // A newly added child has no persisted version yet.
+      if (versionResult.isOk()) {
+        expectedVersions.set(viewId, versionResult.value.toNumber());
+      }
+    }
+
+    const versionedViewIds = [...expectedVersions.keys()];
+    if (versionedViewIds.length === 0) {
+      return ok(undefined);
+    }
+
+    const rows = await db
+      .selectFrom('view')
+      .select(['id', 'version'])
+      .where('table_id', '=', tableId)
+      .where('deleted_time', 'is', null)
+      .where('id', 'in', versionedViewIds)
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const actualVersions = new Map(rows.map((row) => [row.id, Number(row.version ?? 0)]));
+
+    for (const viewId of versionedViewIds) {
+      const expectedVersion = expectedVersions.get(viewId);
+      const actualVersion = actualVersions.get(viewId);
+      if (actualVersion === undefined) {
+        return err(
+          domainError.notFound({
+            code: 'view.not_found',
+            message: `View not found: ${viewId}`,
+            details: { tableId, viewId },
+          })
+        );
+      }
+      if (actualVersion !== expectedVersion) {
+        return err(
+          domainError.conflict({
+            code: 'view.version_conflict',
+            message: `View version conflict: ${viewId}`,
+            details: {
+              tableId,
+              viewId,
+              expectedVersion,
+              actualVersion,
+            },
+          })
+        );
+      }
+    }
+
+    return ok(undefined);
   }
 
   private async loadFieldVersionsByIds(
@@ -1450,12 +1638,23 @@ export class PostgresTableRepository implements core.ITableRepository {
       ? (row.views as Array<{
           id: string;
           name: string;
+          description: string | null;
           type: string;
           options: string | null;
+          order: number;
+          version: number;
           column_meta: string | null;
           sort: string | null;
           filter: string | null;
           group: string | null;
+          is_locked: boolean | null;
+          enable_share: boolean | null;
+          share_id: string | null;
+          share_meta: string | null;
+          created_time: Date | string;
+          last_modified_time: Date | string | null;
+          created_by: string;
+          last_modified_by: string | null;
         }>)
       : [];
 
@@ -1883,15 +2082,20 @@ export class PostgresTableRepository implements core.ITableRepository {
     group: string | null;
   } {
     const query = view.query;
-    const filter = query?.filter == null ? null : JSON.stringify(query.filter);
+    const filter =
+      view.sourceFilter !== undefined
+        ? JSON.stringify(view.sourceFilter)
+        : query?.filter == null
+          ? null
+          : JSON.stringify(query.filter);
     const sort =
-      !query?.sort?.length && query?.manualSort === undefined
+      query?.sort === undefined && query?.manualSort === undefined
         ? null
         : JSON.stringify({
             ...(query?.sort ? { sortObjs: query.sort } : { sortObjs: [] }),
             ...(query?.manualSort !== undefined ? { manualSort: query.manualSort } : {}),
           });
-    const group = query?.group?.length ? JSON.stringify(query.group) : null;
+    const group = query?.group === undefined ? null : JSON.stringify(query.group);
 
     return { filter, sort, group };
   }
@@ -1913,7 +2117,10 @@ export class PostgresTableRepository implements core.ITableRepository {
       )
       .map((item) => ({ fieldId: item.fieldId, order: item.order }));
     const manualSort = typeof record.manualSort === 'boolean' ? record.manualSort : undefined;
-    return { sort: sort.length ? sort : undefined, manualSort };
+    return {
+      sort: Array.isArray(record.sortObjs) ? sort : undefined,
+      manualSort,
+    };
   }
 
   private parseViewGroup(
@@ -1929,7 +2136,7 @@ export class PostgresTableRepository implements core.ITableRepository {
           typeof item.fieldId === 'string' && (item.order === 'asc' || item.order === 'desc')
       )
       .map((item) => ({ fieldId: item.fieldId, order: item.order }));
-    return group.length ? group : undefined;
+    return group;
   }
 
   private mapV1FilterToV2(filter: unknown): core.RecordFilter | null | undefined {
@@ -1969,11 +2176,10 @@ export class PostgresTableRepository implements core.ITableRepository {
   private mapV1FilterGroup(filter: {
     conjunction: 'and' | 'or';
     filterSet: unknown[];
-  }): core.RecordFilterGroup | null {
+  }): core.RecordFilterGroup {
     const items = filter.filterSet
       .map((entry) => this.mapV1FilterEntry(entry))
       .filter((entry): entry is core.RecordFilterNode => Boolean(entry));
-    if (items.length === 0) return null;
     return {
       conjunction: filter.conjunction === 'or' ? 'or' : 'and',
       items,
@@ -2232,40 +2438,77 @@ export class PostgresTableRepository implements core.ITableRepository {
   private deserializeViewDto(row: {
     id: string;
     name: string;
+    description: string | null;
     type: string;
     options: string | null;
+    order: number;
+    version: number;
     column_meta: string | null;
     sort: string | null;
     filter: string | null;
     group: string | null;
+    is_locked: boolean | null;
+    enable_share: boolean | null;
+    share_id: string | null;
+    share_meta: string | null;
+    created_time: Date | string;
+    last_modified_time: Date | string | null;
+    created_by: string;
+    last_modified_by: string | null;
   }): Result<core.ITableViewPersistenceDTO, DomainError> {
     const columnMeta = this.parseOptions(
       row.column_meta
     ) as core.ITableViewPersistenceDTO['columnMeta'];
 
     const filter = this.parseViewFilter(row.filter);
+    // Only a legacy-shaped filter (filterSet) needs source preservation; a v2
+    // canonical filter round-trips through query.filter and must not be fed to
+    // the legacy source-filter schema.
+    const rawFilter = row.filter == null ? undefined : this.parseJsonValue(row.filter);
+    const sourceFilter =
+      rawFilter != null && typeof rawFilter === 'object' && 'filterSet' in rawFilter
+        ? rawFilter
+        : undefined;
     const sortResult = this.parseViewSort(row.sort);
     const group = this.parseViewGroup(row.group);
     const query: core.ViewQueryDefaultsDTO = {
       ...(filter !== undefined ? { filter } : {}),
       ...(sortResult.sort ? { sort: sortResult.sort } : {}),
-      ...(group ? { group } : {}),
+      ...(group !== undefined ? { group } : {}),
       ...(sortResult.manualSort !== undefined ? { manualSort: sortResult.manualSort } : {}),
     };
     const options = row.options === null ? undefined : this.parseJsonValue(row.options);
+    const shareMeta = row.share_meta === null ? undefined : this.parseJsonValue(row.share_meta);
+    const base = {
+      id: row.id,
+      name: row.name,
+      version: Number(row.version),
+      order: Number(row.order),
+      ...(row.description !== null ? { description: row.description } : {}),
+      ...(row.is_locked !== null ? { isLocked: row.is_locked } : {}),
+      ...(row.enable_share !== null ? { enableShare: row.enable_share } : {}),
+      ...(row.share_id !== null ? { shareId: row.share_id } : {}),
+      ...(shareMeta !== undefined
+        ? { shareMeta: shareMeta as core.ITableViewPersistenceDTO['shareMeta'] }
+        : {}),
+      ...(row.created_by != null ? { createdBy: row.created_by } : {}),
+      ...(row.created_time != null ? { createdTime: toIsoTimestamp(row.created_time) } : {}),
+      ...(row.last_modified_by != null ? { lastModifiedBy: row.last_modified_by } : {}),
+      ...(row.last_modified_time != null
+        ? { lastModifiedTime: toIsoTimestamp(row.last_modified_time) }
+        : {}),
+      columnMeta,
+      query,
+      ...(sourceFilter !== undefined ? { sourceFilter } : {}),
+      options,
+    };
 
-    if (row.type === 'grid')
-      return ok({ id: row.id, name: row.name, type: 'grid', columnMeta, query, options });
-    if (row.type === 'kanban')
-      return ok({ id: row.id, name: row.name, type: 'kanban', columnMeta, query, options });
-    if (row.type === 'gallery')
-      return ok({ id: row.id, name: row.name, type: 'gallery', columnMeta, query, options });
-    if (row.type === 'calendar')
-      return ok({ id: row.id, name: row.name, type: 'calendar', columnMeta, query, options });
-    if (row.type === 'form')
-      return ok({ id: row.id, name: row.name, type: 'form', columnMeta, query, options });
-    if (row.type === 'plugin')
-      return ok({ id: row.id, name: row.name, type: 'plugin', columnMeta, query, options });
+    if (row.type === 'grid') return ok({ ...base, type: 'grid' });
+    if (row.type === 'kanban') return ok({ ...base, type: 'kanban' });
+    if (row.type === 'gallery') return ok({ ...base, type: 'gallery' });
+    if (row.type === 'calendar') return ok({ ...base, type: 'calendar' });
+    if (row.type === 'form') return ok({ ...base, type: 'form' });
+    if (row.type === 'plugin') return ok({ ...base, type: 'plugin' });
     return err(domainError.validation({ message: 'Unsupported view type' }));
   }
 

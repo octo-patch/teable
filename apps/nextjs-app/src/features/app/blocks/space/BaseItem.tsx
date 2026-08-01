@@ -34,7 +34,7 @@ export interface IBaseItemProps {
   dragHandleListeners?: Record<string, unknown>;
   onToggleExpand?: () => void;
   onEnterBase?: () => void;
-  onUpdate?: (data: { name?: string; icon?: string }) => void;
+  onUpdate?: (data: { name?: string; icon?: string | null }) => void;
   onDelete?: (permanent?: boolean) => void;
 }
 
@@ -131,7 +131,9 @@ export const BaseItem: FC<IBaseItemProps> = (props) => {
           <EmojiPicker
             className="flex items-center justify-center"
             disabled={!hasUpdatePermission || isEditing}
+            icon={base.icon}
             onChange={(icon) => onUpdate?.({ icon })}
+            onRemove={() => onUpdate?.({ icon: null })}
           >
             {base.icon ? <Emoji emoji={base.icon} size="1rem" /> : <Database className="size-4" />}
           </EmojiPicker>

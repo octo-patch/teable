@@ -897,7 +897,7 @@ describe('duplicateField', () => {
         lookupFieldId: scoreLookupFieldId,
         targetField: { type: 'rating' },
         copiedValue: [4.7],
-        expectedValue: 4,
+        expectedValue: 5,
       });
       await duplicateAndConvert({
         lookupFieldId: doneLookupFieldId,

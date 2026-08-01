@@ -381,6 +381,115 @@ describe('useGridAsyncRecords', () => {
     });
   });
 
+  // shared two-group fixture for the collapse/expand tests below
+  type IOuterQuery = Pick<IGetRecordsRo, 'groupBy' | 'collapsedGroupIds'>;
+  const GROUP_BY = [{ fieldId: 'fldGroup', order: SortFunc.Asc }];
+  const TWO_GROUP_POINTS = [
+    { id: 'grpA', type: 0, depth: 0, value: 'A', isCollapsed: false },
+    { type: 1, count: 2 },
+    { id: 'grpB', type: 0, depth: 0, value: 'B', isCollapsed: false },
+    { type: 1, count: 2 },
+  ] as IGroupPointsVo;
+  const renderTwoGroupGrid = () => {
+    mockedUseRecords.mockReturnValue(
+      mockUseRecordsResult(
+        [
+          createRecord('recA1'),
+          createRecord('recA2'),
+          createRecord('recB1'),
+          createRecord('recB2'),
+        ],
+        { groupPoints: TWO_GROUP_POINTS }
+      )
+    );
+    mockedUseView.mockReturnValue({ id: 'viwTest', filter: null } as unknown as ReturnType<
+      typeof useView
+    >);
+    return renderHook(({ outerQuery }) => useGridAsyncRecords(undefined, undefined, outerQuery), {
+      initialProps: { outerQuery: { groupBy: GROUP_BY } as IOuterQuery },
+    });
+  };
+
+  it('patches the layout in place on a collapse toggle instead of wiping to placeholders', async () => {
+    const { result, rerender } = renderTwoGroupGrid();
+    expect(result.current.recordMap[3]?.id).toBe('recB2');
+
+    // collapse group A: the layout and loaded rows repaint in place — group B
+    // shifts up with its rows, nothing drops to loading placeholders
+    rerender({ outerQuery: { groupBy: GROUP_BY, collapsedGroupIds: ['grpA'] } });
+
+    expect(result.current.groupPoints).toEqual([
+      { id: 'grpA', type: 0, depth: 0, value: 'A', isCollapsed: true },
+      { id: 'grpB', type: 0, depth: 0, value: 'B', isCollapsed: false },
+      { type: 1, count: 2 },
+    ]);
+    expect(result.current.recordMap[0]?.id).toBe('recB1');
+    expect(result.current.recordMap[1]?.id).toBe('recB2');
+    expect(result.current.recordMap[2]).toBeUndefined();
+
+    // the re-created subscription delivers server truth the patch could not
+    // know (a row was added to group B meanwhile): it replaces the patched
+    // state entirely
+    const freshGroupPoints = [
+      { id: 'grpA', type: 0, depth: 0, value: 'A', isCollapsed: true },
+      { id: 'grpB', type: 0, depth: 0, value: 'B', isCollapsed: false },
+      { type: 1, count: 3 },
+    ] as IGroupPointsVo;
+    mockedUseRecords.mockReturnValue(
+      mockUseRecordsResult([createRecord('recB1'), createRecord('recB2'), createRecord('recB3')], {
+        groupPoints: freshGroupPoints,
+      })
+    );
+    rerender({ outerQuery: { groupBy: GROUP_BY, collapsedGroupIds: ['grpA'] } });
+
+    await waitFor(() => {
+      expect(result.current.groupPoints).toEqual(freshGroupPoints);
+      expect(result.current.recordMap[2]?.id).toBe('recB3');
+    });
+  });
+
+  it('re-expands a group in place using its cached row count, keeping rows behind it', () => {
+    const { result, rerender } = renderTwoGroupGrid();
+
+    // collapse A (its row count is cached from the delivered points), then
+    // expand it back before any fresh delivery arrives
+    rerender({ outerQuery: { groupBy: GROUP_BY, collapsedGroupIds: ['grpA'] } });
+    rerender({ outerQuery: { groupBy: GROUP_BY } });
+
+    // the layout is restored in place: A shows a loading block of its known
+    // size while B's rows keep their content at their exact positions
+    expect(result.current.groupPoints).toEqual(TWO_GROUP_POINTS);
+    expect(result.current.recordMap[0]).toBeUndefined();
+    expect(result.current.recordMap[1]).toBeUndefined();
+    expect(result.current.recordMap[2]?.id).toBe('recB1');
+    expect(result.current.recordMap[3]?.id).toBe('recB2');
+  });
+
+  it('does not reuse cached row counts across a view filter change', () => {
+    const { result, rerender } = renderTwoGroupGrid();
+
+    rerender({ outerQuery: { groupBy: GROUP_BY, collapsedGroupIds: ['grpA'] } });
+
+    // the view filter changes while A is collapsed: its cached count now
+    // describes a different result set and must be dropped
+    mockedUseView.mockReturnValue({
+      id: 'viwTest',
+      filter: { conjunction: 'and', filterSet: [] },
+    } as unknown as ReturnType<typeof useView>);
+    rerender({ outerQuery: { groupBy: GROUP_BY, collapsedGroupIds: ['grpA'] } });
+
+    rerender({ outerQuery: { groupBy: GROUP_BY } });
+
+    // expanding falls back to loading placeholders instead of placing rows
+    // with a count from the pre-filter result set
+    expect(result.current.groupPoints).toEqual([
+      { id: 'grpA', type: 0, depth: 0, value: 'A', isCollapsed: false },
+      { id: 'grpB', type: 0, depth: 0, value: 'B', isCollapsed: false },
+      { type: 1, count: 2 },
+    ]);
+    expect(result.current.recordMap).toEqual({});
+  });
+
   it('does not keep empty cache slots in the loaded record map when loading a later window', async () => {
     mockedUseRecords.mockReturnValue(
       mockUseRecordsResult([createRecord('rec1'), createRecord('rec2')])

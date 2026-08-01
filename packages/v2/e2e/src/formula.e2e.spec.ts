@@ -1930,11 +1930,11 @@ describe('v2 http formula (e2e)', () => {
     });
 
     /**
-     * Scenario: boolean and number arithmetic
+     * Scenario: empty checkbox and number arithmetic
      * Formula:{checkboxField} + 1
-     * Expect: true coerces to 1, false to 0
+     * Expect: true remains true; false is normalized to null before evaluation
      */
-    it('should coerce boolean to number - {checkboxField} + 1', async () => {
+    it('should treat an unchecked checkbox as empty - {checkboxField} + 1', async () => {
       const createTableResponse = await fetch(`${ctx.baseUrl}/tables/create`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -2028,7 +2028,8 @@ describe('v2 http formula (e2e)', () => {
       if (!trueRecordResult || !falseRecordResult) return;
 
       expect(trueRecordResult.fields[formulaFieldId]).toBe('true1');
-      expect(falseRecordResult.fields[formulaFieldId]).toBe('false1');
+      // v1 stores unchecked as null, and null + 1 evaluates to '1' (never 'false1')
+      expect(falseRecordResult.fields[formulaFieldId]).toBe('1');
     });
 
     /**

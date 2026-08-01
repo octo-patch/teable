@@ -1,7 +1,10 @@
 import type { Action, IFieldVo } from '@teable/core';
 import type { Prisma } from '@teable/db-main-prisma';
 import type { V2Feature } from '@teable/openapi';
-import type { ExecutionContextBackgroundTaskScheduler } from '@teable/v2-core';
+import type {
+  ExecutionContextBackgroundTaskScheduler,
+  IRecordRemovalReason,
+} from '@teable/v2-core';
 import type { ClsStore } from 'nestjs-cls';
 import type { IAuditOperation } from '../features/audit/audit-scope';
 import type { IWorkflowContext } from '../features/auth/strategies/types';
@@ -115,6 +118,7 @@ export interface IClsStore extends ClsStore {
   v2Reason?: IV2Reason; // Reason why V2 was enabled or disabled
   v2Feature?: V2Feature; // The feature name that triggered V2 check
   windowId?: string; // Window ID from x-window-id header for undo/redo tracking
+  recordRemovalReason?: IRecordRemovalReason; // set by the archive flow; flows into op events
   // cache for base share node tree (to avoid repeated queries within same request)
   baseShareNodeCache?: Map<
     string,

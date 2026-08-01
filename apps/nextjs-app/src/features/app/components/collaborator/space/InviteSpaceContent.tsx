@@ -27,6 +27,7 @@ import { Badge } from '@teable/ui-lib/shadcn';
 import { toast } from '@teable/ui-lib/shadcn/ui/sonner';
 import { Trans, useTranslation } from 'next-i18next';
 import { useMemo, useState } from 'react';
+import { useSeatConfirm } from '../../../hooks/useSeatConfirm';
 import { useFilteredRoleStatic as useFilteredBaseRoleStatic } from '../../collaborator-manage/base/useFilteredRoleStatic';
 import { OverflowText } from '../../collaborator-manage/components/Collaborator';
 import { useFilteredRoleStatic } from '../../collaborator-manage/space/useFilteredRoleStatic';
@@ -59,6 +60,7 @@ export const InviteSpaceContent = (props: IInviteSpaceContentProps) => {
   const { t } = useTranslation('common');
   const { user } = useSession();
   const [tabType, setTabType] = useState<'email' | 'organization' | 'link' | 'collaborators'>();
+  const confirmSeat = useSeatConfirm({ spaceId });
 
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
@@ -230,19 +232,23 @@ export const InviteSpaceContent = (props: IInviteSpaceContentProps) => {
         isCreateLoading={createInviteLinkLoading}
         isUpdateLoading={updateInviteLinkLoading}
         isDeleteLoading={deleteInviteLinkLoading}
-        onCreate={(role) =>
-          createInviteLinkRequest({
-            spaceId,
-            createSpaceInvitationLinkRo: { role: role as IBaseRole },
-          })
-        }
-        onUpdate={(invitationId, role) =>
-          updateInviteLink({
-            invitationId,
-            updateSpaceInvitationLinkRo: { role: role as IBaseRole },
-            spaceId,
-          })
-        }
+        onCreate={async (role) => {
+          if (await confirmSeat({ role, count: 1, action: 'link' })) {
+            createInviteLinkRequest({
+              spaceId,
+              createSpaceInvitationLinkRo: { role: role as IBaseRole },
+            });
+          }
+        }}
+        onUpdate={async (invitationId, role) => {
+          if (await confirmSeat({ role, count: 1, action: 'link' })) {
+            updateInviteLink({
+              invitationId,
+              updateSpaceInvitationLinkRo: { role: role as IBaseRole },
+              spaceId,
+            });
+          }
+        }}
         onDelete={(invitationId) => deleteInviteLink({ invitationId, spaceId })}
         onBack={onBack}
         filteredRoleStatic={filteredRoleStatic}
@@ -259,7 +265,11 @@ export const InviteSpaceContent = (props: IInviteSpaceContentProps) => {
         defaultRole={defaultRole}
         isCreateLoading={emailInvitationLoading}
         onCreate={async (ro) => {
+          if (!(await confirmSeat({ role: ro.role, count: ro.emails.length, action: 'invite' }))) {
+            return false;
+          }
           await emailInvitation({ spaceId, emailSpaceInvitationRo: ro });
+          return true;
         }}
         onBack={onBack}
         filteredRoleStatic={filteredRoleStatic}
@@ -273,9 +283,12 @@ export const InviteSpaceContent = (props: IInviteSpaceContentProps) => {
       <OrgContent
         defaultRole={defaultRole}
         isCreateLoading={addCollaboratorsLoading}
-        onCreate={(role, members) =>
-          addCollaborators({ role: role as IRole, collaborators: members })
-        }
+        onCreate={async (role, members) => {
+          const userCount = members.filter((m) => m.principalType === PrincipalType.User).length;
+          if (await confirmSeat({ role: role as IRole, count: userCount, action: 'invite' })) {
+            addCollaborators({ role: role as IRole, collaborators: members });
+          }
+        }}
         onBack={onBack}
         filteredRoleStatic={filteredRoleStatic}
       />
@@ -357,7 +370,11 @@ export const InviteSpaceContent = (props: IInviteSpaceContentProps) => {
                   updateRoleLoading={updateCollaboratorLoading}
                   deleteLoading={deleteCollaboratorLoading}
                   getFilteredRoleStatic={getFilteredRoleStatic}
-                  onUpdateRole={(role, item) => {
+                  onUpdateRole={async (role, item) => {
+                    const addedSeats = item.type === PrincipalType.User && !item.billable ? 1 : 0;
+                    if (!(await confirmSeat({ role, count: addedSeats, action: 'roleChange' }))) {
+                      return;
+                    }
                     updateCollaborator({
                       resourceId: item.base?.id || spaceId,
                       isBase: item.resourceType === CollaboratorType.Base,
@@ -384,7 +401,7 @@ export const InviteSpaceContent = (props: IInviteSpaceContentProps) => {
                       item.resourceType === CollaboratorType.Base &&
                       item.base?.name && (
                         <Badge
-                          className="px-2 max-w-24 shrink-0 whitespace-nowrap text-xs font-normal"
+                          className="max-w-24 shrink-0 whitespace-nowrap px-2 text-xs font-normal"
                           variant={'outline'}
                         >
                           <OverflowText text={item.base.name} />

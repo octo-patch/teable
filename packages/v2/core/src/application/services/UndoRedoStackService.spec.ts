@@ -4,8 +4,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { ApplyFieldSnapshotCommand } from '../../commands/ApplyFieldSnapshotCommand';
 import type { ApplyRecordOrdersCommand } from '../../commands/ApplyRecordOrdersCommand';
+import type { ApplyViewSnapshotCommand } from '../../commands/ApplyViewSnapshotCommand';
 import type { DeleteFieldCommand } from '../../commands/DeleteFieldCommand';
+import type { DeleteViewCommand } from '../../commands/DeleteViewCommand';
+import type { DisableViewShareCommand } from '../../commands/DisableViewShareCommand';
+import type { EnableViewShareCommand } from '../../commands/EnableViewShareCommand';
 import type { ReplayFieldTypeConversionCommand } from '../../commands/ReplayFieldTypeConversionCommand';
+import type { SetButtonValueCommand } from '../../commands/SetButtonValueCommand';
 import type { UpdateRecordCommand } from '../../commands/UpdateRecordCommand';
 import type { UpdateRecordsCommand } from '../../commands/UpdateRecordsCommand';
 import { ActorId } from '../../domain/shared/ActorId';
@@ -322,6 +327,55 @@ describe('UndoRedoStackService', () => {
     expect(entry.recordVersionAfter).toBe(4);
   });
 
+  it('replays Button snapshots with the aggregate-only Button command', async () => {
+    const store = new MemoryUndoRedoStore();
+    const bus = new FakeCommandBus();
+    const service = new UndoRedoStackService(store, bus);
+    const context = buildContext();
+    const { tableId, recordId } = buildRecordIds();
+    const fieldId = `fld${'c'.repeat(16)}`;
+
+    await service.appendButtonValueUpdateFromSnapshot(toUndoRedoStackAppendContext(context), {
+      tableId,
+      recordId,
+      fieldId,
+      snapshot: {
+        previous: {
+          recordId: recordId.toString(),
+          fields: {},
+        },
+        current: {
+          recordId: recordId.toString(),
+          fields: { [fieldId]: { count: 1 } },
+        },
+        oldVersion: 7,
+        newVersion: 8,
+      },
+    });
+
+    const entries = (await store.list(buildScope(context, tableId)))._unsafeUnwrap();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.undoCommand).toMatchObject({
+      type: 'SetButtonValue',
+      payload: { fieldId, value: null },
+    });
+    expect(entries[0]?.redoCommand).toMatchObject({
+      type: 'SetButtonValue',
+      payload: { fieldId, value: { count: 1 } },
+    });
+
+    await service.applyUndo(toUndoRedoStackReplayContext(context), tableId, context.windowId);
+    const undoCommand = bus.lastCommand as SetButtonValueCommand;
+    expect(undoCommand.fieldId.toString()).toBe(fieldId);
+    expect(undoCommand.value).toBeNull();
+    expect(bus.lastContext?.undoRedo?.mode).toBe('undo');
+
+    await service.applyRedo(toUndoRedoStackReplayContext(context), tableId, context.windowId);
+    const redoCommand = bus.lastCommand as SetButtonValueCommand;
+    expect(redoCommand.value).toEqual({ count: 1 });
+    expect(bus.lastContext?.undoRedo?.mode).toBe('redo');
+  });
+
   it('executes apply-record-orders undo entries via the command bus', async () => {
     const store = new MemoryUndoRedoStore();
     const bus = new FakeCommandBus();
@@ -402,6 +456,81 @@ describe('UndoRedoStackService', () => {
     expect(bus.lastContext?.undoRedo?.mode).toBe('redo');
     const applyFieldSnapshotCommand = bus.lastCommand as ApplyFieldSnapshotCommand;
     expect(applyFieldSnapshotCommand.snapshot.field.id).toBe(fieldId);
+  });
+
+  it('executes View snapshot replay and delete through v2 commands', async () => {
+    const store = new MemoryUndoRedoStore();
+    const bus = new FakeCommandBus();
+    const service = new UndoRedoStackService(store, bus);
+    const context = buildContext();
+    const { tableId } = buildRecordIds();
+    const viewId = `viw${'v'.repeat(16)}`;
+    const snapshot = {
+      id: viewId,
+      name: 'Planning',
+      type: 'grid' as const,
+      order: 2,
+      properties: {
+        description: 'Restored by v2',
+        isLocked: true,
+      },
+      columnMeta: {
+        [`fld${'f'.repeat(16)}`]: { order: 0, width: 320 },
+      },
+      query: {},
+      options: { rowHeight: 'tall' },
+    };
+
+    await service.appendEntry(toUndoRedoStackAppendContext(context), tableId, {
+      undoCommand: createUndoRedoCommand('ApplyViewSnapshot', {
+        tableId: tableId.toString(),
+        snapshot,
+      }),
+      redoCommand: createUndoRedoCommand('DeleteView', {
+        tableId: tableId.toString(),
+        viewId,
+      }),
+    });
+
+    await service.applyUndo(toUndoRedoStackReplayContext(context), tableId, context.windowId);
+    expect(bus.lastContext?.undoRedo?.mode).toBe('undo');
+    const applyViewSnapshotCommand = bus.lastCommand as ApplyViewSnapshotCommand;
+    expect(applyViewSnapshotCommand.snapshot).toEqual(snapshot);
+
+    await service.applyRedo(toUndoRedoStackReplayContext(context), tableId, context.windowId);
+    expect(bus.lastContext?.undoRedo?.mode).toBe('redo');
+    const deleteViewCommand = bus.lastCommand as DeleteViewCommand;
+    expect(deleteViewCommand.viewId.toString()).toBe(viewId);
+  });
+
+  it('replays View share lifecycle commands without carrying share credentials', async () => {
+    const store = new MemoryUndoRedoStore();
+    const bus = new FakeCommandBus();
+    const service = new UndoRedoStackService(store, bus);
+    const context = buildContext();
+    const { tableId } = buildRecordIds();
+    const viewId = `viw${'s'.repeat(16)}`;
+
+    await service.appendEntry(toUndoRedoStackAppendContext(context), tableId, {
+      undoCommand: createUndoRedoCommand('EnableViewShare', {
+        tableId: tableId.toString(),
+        viewId,
+      }),
+      redoCommand: createUndoRedoCommand('DisableViewShare', {
+        tableId: tableId.toString(),
+        viewId,
+      }),
+    });
+
+    await service.applyUndo(toUndoRedoStackReplayContext(context), tableId, context.windowId);
+    const enableCommand = bus.lastCommand as EnableViewShareCommand;
+    expect(enableCommand.viewId.toString()).toBe(viewId);
+    expect(bus.lastContext?.undoRedo?.mode).toBe('undo');
+
+    await service.applyRedo(toUndoRedoStackReplayContext(context), tableId, context.windowId);
+    const disableCommand = bus.lastCommand as DisableViewShareCommand;
+    expect(disableCommand.viewId.toString()).toBe(viewId);
+    expect(bus.lastContext?.undoRedo?.mode).toBe('redo');
   });
 
   it('executes field type conversion replay via the command bus', async () => {

@@ -386,6 +386,8 @@
       "tableTrashRead": "Tabelle Papierkorb lesen",
       "tableTrashUpdate": "Tabelle Papierkorb akualisieren",
       "tableTrashReset": "Tabelle Papierkorb zurücksetzen",
+      "tableArchiveRead": "Tabellenarchiv lesen",
+      "tableArchiveManage": "Tabellenarchiv verwalten",
       "viewCreate": "Ansicht erstellen",
       "viewDelete": "Ansicht löschen",
       "viewRead": "Ansicht lesen",
@@ -401,6 +403,7 @@
       "recordRead": "Datensatz lesen",
       "recordUpdate": "Datensatz aktualisieren",
       "recordCopy": "Copy record",
+      "recordArchive": "Datensatz archivieren",
       "automationCreate": "Automatisierung erstellen",
       "automationDelete": "Automatisierung löschen",
       "automationRead": "Automatisierung lesen",
@@ -926,15 +929,18 @@
       "nameMaxLength": "Der Name ist zu lang. Maximal zulässig sind {{max}} Zeichen.",
       "descriptionMaxLength": "Die Beschreibung ist zu lang. Maximal zulässig sind {{max}} Zeichen."
     },
-    "validation": {
-      "field": {
-        "unique": "Feld muss einen eindeutigen Wert haben"
-      }
-    },
     "custom": {
       "fieldValueNotNull": "\"{{tableName}}\" Feld \"{{fieldName}}\" darf keine leeren Werte enthalten, bitte vollständig ausfüllen bevor Sie absenden.",
       "fieldValueDuplicate": "\"{{tableName}}\" Feld \"{{fieldName}}\" darf keine doppelten Werte enthalten, bitte einen eindeutigen Wert vor dem Absenden ausfüllen.",
+      "recordFieldValueNotNull": "Feld \"{{fieldName}}\" darf keine leeren Werte enthalten, bitte vollständig ausfüllen bevor Sie absenden.",
+      "recordFieldValueDuplicate": "Feld \"{{fieldName}}\" darf keine doppelten Werte enthalten, bitte einen eindeutigen Wert vor dem Absenden ausfüllen.",
       "linkFieldValueDuplicate": "\"{{fieldName}}\" Feld darf keine doppelten Werte enthalten, bitte einen eindeutigen Wert vor dem Absenden ausfüllen.",
+      "linkBatchDuplicate": "Verknüpfung nicht möglich: Im selben Batch wurde der Datensatz bereits von einem anderen Datensatz verknüpft. In Eins-zu-viele-Beziehungen kann jeder untergeordnete Datensatz nur zu einem übergeordneten Datensatz gehören.",
+      "linkOneManyDuplicate": "Verknüpfung nicht möglich: Der Datensatz ist bereits mit einem anderen Datensatz verknüpft. In Eins-zu-viele-Beziehungen kann jeder untergeordnete Datensatz nur zu einem übergeordneten Datensatz gehören.",
+      "linkOneOneDuplicate": "Verknüpfung nicht möglich: Der Zieldatensatz ist in einer Eins-zu-eins-Beziehung bereits mit einem anderen Datensatz verknüpft.",
+      "fieldMaxColumnLimit": "Die Tabelle \"{{tableName}}\" darf höchstens {{maxFieldCount}} Felder enthalten.",
+      "fieldRequiredExistingValues": "Feld \"{{fieldName}}\" kann nicht als erforderlich markiert werden, da vorhandene Datensätze leere Werte enthalten.",
+      "fieldUniqueExistingValues": "Feld \"{{fieldName}}\" kann nicht als eindeutig markiert werden, da vorhandene Datensätze doppelte Werte enthalten.",
       "requestTimeout": "Der aktuelle Vorgangsbereich ist zu groß, bitte versuchen Sie es mit einem kleineren Bereich erneut.",
       "searchTimeOut": "Suche ist abgelaufen, bitte die Suchbegriffe reduzieren und erneut versuchen.",
       "dependencyNodeRequire": "Abhängiger Knoten nicht getestet, bitte überprüfen Sie, ob alle vorherigen Knoten getestet wurden",

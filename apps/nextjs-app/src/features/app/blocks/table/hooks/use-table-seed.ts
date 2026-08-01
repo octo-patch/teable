@@ -3,6 +3,7 @@ import { FieldKeyType, ViewType } from '@teable/core';
 import type { IRecordsVo } from '@teable/openapi';
 import { getFields, getRecords, getViewList } from '@teable/openapi';
 import { ReactQueryKeys } from '@teable/sdk';
+import { INITIAL_LOAD_PAGE_SIZE } from '@teable/sdk/utils/record-window';
 
 /**
  * Bootstrap data for a client-side table switch.
@@ -27,7 +28,13 @@ export const useTableSeed = (tableId: string, viewId: string, enabled: boolean) 
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     queryFn: async () => {
-      const recordsQuery = { viewId, fieldKeyType: FieldKeyType.Id } as const;
+      // take must equal the grid's first window size — the seeded rows back
+      // that query verbatim, and any gap renders as blank rows
+      const recordsQuery = {
+        viewId,
+        fieldKeyType: FieldKeyType.Id,
+        take: INITIAL_LOAD_PAGE_SIZE,
+      } as const;
       const [fields, views, plainRecords] = await Promise.all([
         getFields(tableId, { viewId }).then((res) => res.data),
         getViewList(tableId).then((res) => res.data),

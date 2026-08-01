@@ -127,6 +127,7 @@ export class DeleteRecordsHandler
             if (pluginBeforePersist.isErr()) {
               return err(pluginBeforePersist.error);
             }
+
             const deleteResult = await handler.tableRecordRepository.deleteMany(
               transactionContext,
               table,
@@ -139,6 +140,45 @@ export class DeleteRecordsHandler
                 return ok<TableRecordRepositoryPort.DeleteManyResult>({});
               }
               return err(deleteResult.error);
+            }
+
+            // Redo of an archive: the undo removed the archive snapshot rows, so they
+            // are re-persisted before this transaction commits. Runs after the delete
+            // only to learn which rows it actually removed: the carried payload is
+            // narrowed to them (a row purged from the archive meanwhile must stay
+            // purged) and stamped with the replay time so the re-archived row sorts
+            // after the undo's restore tombstone instead of being suppressed by it in
+            // cold storage. The original archive call never enters here — its rows
+            // were written by the orchestrator before the command ran.
+            if (
+              command.removalReason === 'archived' &&
+              command.archiveRows?.length &&
+              context.undoRedo?.mode === 'redo'
+            ) {
+              const deletedIds = new Set(
+                (deleteResult.value.deletedRecords ?? []).map((snapshot) => snapshot.recordId)
+              );
+              const replayTime = new Date().toISOString();
+              const replayRows = command.archiveRows
+                .filter((row) => deletedIds.has(row.recordId))
+                .map((row) => ({ ...row, createdTime: replayTime }));
+              if (replayRows.length > 0) {
+                if (!handler.tableRecordRepository.insertArchiveTrashRows) {
+                  return err(
+                    domainError.validation({
+                      message: 'Repository does not support archive snapshot persistence',
+                    })
+                  );
+                }
+                const persistResult = await handler.tableRecordRepository.insertArchiveTrashRows(
+                  transactionContext,
+                  table,
+                  replayRows
+                );
+                if (persistResult.isErr()) {
+                  return err(persistResult.error);
+                }
+              }
             }
 
             return ok(deleteResult.value);
@@ -182,28 +222,51 @@ export class DeleteRecordsHandler
             chunkIndex: 0,
             scope: 'operation',
           },
+          removalReason: command.removalReason,
         }),
       ];
       yield* await handler.eventBus.publishMany(context, events);
 
       if (recordSnapshots.length > 0) {
-        yield* await handler.undoRedoStackService.appendRecordDelete(
-          toUndoRedoStackAppendContext(context),
-          {
-            tableId: table.id(),
-            deletedRecords: recordSnapshots.map((snapshot) => ({
-              recordId: snapshot.id,
-              fields: snapshot.fields,
-              ...(snapshot.version !== undefined ? { version: snapshot.version } : {}),
-              ...(snapshot.orders ? { orders: snapshot.orders } : {}),
-              ...(snapshot.autoNumber !== undefined ? { autoNumber: snapshot.autoNumber } : {}),
-              ...(snapshot.createdTime ? { createdTime: snapshot.createdTime } : {}),
-              ...(snapshot.createdBy ? { createdBy: snapshot.createdBy } : {}),
-              ...(snapshot.lastModifiedTime ? { lastModifiedTime: snapshot.lastModifiedTime } : {}),
-              ...(snapshot.lastModifiedBy ? { lastModifiedBy: snapshot.lastModifiedBy } : {}),
-            })),
-          }
-        );
+        const stackRecords = recordSnapshots.map((snapshot) => ({
+          recordId: snapshot.id,
+          fields: snapshot.fields,
+          ...(snapshot.version !== undefined ? { version: snapshot.version } : {}),
+          ...(snapshot.orders ? { orders: snapshot.orders } : {}),
+          ...(snapshot.autoNumber !== undefined ? { autoNumber: snapshot.autoNumber } : {}),
+          ...(snapshot.createdTime ? { createdTime: snapshot.createdTime } : {}),
+          ...(snapshot.createdBy ? { createdBy: snapshot.createdBy } : {}),
+          ...(snapshot.lastModifiedTime ? { lastModifiedTime: snapshot.lastModifiedTime } : {}),
+          ...(snapshot.lastModifiedBy ? { lastModifiedBy: snapshot.lastModifiedBy } : {}),
+        }));
+
+        if (command.removalReason !== 'archived') {
+          yield* await handler.undoRedoStackService.appendRecordDelete(
+            toUndoRedoStackAppendContext(context),
+            {
+              tableId: table.id(),
+              deletedRecords: stackRecords,
+            }
+          );
+        } else if (command.archiveRows?.length) {
+          // Archive removals get a dedicated entry: undo restores the records AND cleans
+          // the archive snapshot rows + kept attachment refs; redo re-persists the carried
+          // snapshot rows before deleting again. A plain delete entry would leave the
+          // record in both places after undo and lose the archive snapshot on redo.
+          // The carried rows are narrowed to what this run actually deleted so a later
+          // undo/redo round cannot resurrect rows purged in between.
+          const deletedIdSet = new Set(deletedRecordIds);
+          yield* await handler.undoRedoStackService.appendRecordArchive(
+            toUndoRedoStackAppendContext(context),
+            {
+              tableId: table.id(),
+              archivedRecords: stackRecords,
+              recordIds: deletedRecordIds,
+              archiveRows: command.archiveRows.filter((row) => deletedIdSet.has(row.recordId)),
+              ...(command.archiveGroupId ? { groupId: command.archiveGroupId } : {}),
+            }
+          );
+        }
       }
       await pluginExecution.afterCommit();
 

@@ -405,6 +405,11 @@ describe('OpenAPI TableController (e2e)', () => {
     expect(table.name).toEqual('newTableName');
     expect(table.description).toEqual('newDescription');
     expect(table.icon).toEqual('😀');
+
+    await updateTableIcon(baseId, tableId, { icon: null });
+
+    const tableAfterIconRemoved = await getTable(baseId, tableId);
+    expect(tableAfterIconRemoved.icon).toBeFalsy();
   });
 
   it('should delete table and clean up link and lookup fields', async () => {

@@ -12,6 +12,7 @@ import {
   type TableQueryRecommendationRepository,
   type TableQueryRemediationExecutor,
   type TableQueryRemediationTaskRepository,
+  type TableSearchAccessPathResolver,
   type TableSearchVectorReconciler,
   type TableSearchVectorSchemaMaintenanceScheduler,
   type TableSearchVectorStatusReader,
@@ -32,10 +33,13 @@ import {
   PostgresTableQueryRemediationTaskRepository,
 } from './repositories';
 import { ensureTableQueryOpsSchema, type TableQueryOpsDatabase } from './schema';
+import { PostgresTableSearchAccessPathCapabilityReader } from './searchAccessPathCapability';
 import { PostgresTableSearchVectorReconciler } from './searchVector';
 import { PostgresTableSearchVectorSchemaMaintenanceScheduler } from './searchVectorMaintenance';
-import { PostgresTableSearchVectorStatusReader } from './searchVectorStatus';
-import { PostgresTableSearchAccessPathCapabilityReader } from './searchAccessPathCapability';
+import {
+  PostgresTableSearchAccessPathResolver,
+  PostgresTableSearchVectorStatusReader,
+} from './searchVectorStatus';
 import { v2TableOpsPostgresTokens } from './tokens';
 import type { UnknownPostgresDatabase } from './types';
 
@@ -138,6 +142,10 @@ export const registerV2TableOpsPostgresAdapter = async <
   container.registerInstance<TableSearchVectorStatusReader>(
     v2TableOpsTokens.searchVectorStatusReader,
     new PostgresTableSearchVectorStatusReader(unknownMetaDb)
+  );
+  container.registerInstance<TableSearchAccessPathResolver>(
+    v2TableOpsTokens.searchAccessPathResolver,
+    new PostgresTableSearchAccessPathResolver(unknownMetaDb)
   );
   container.registerInstance<TableSearchAccessPathCapabilityReader>(
     v2TableOpsTokens.searchAccessPathCapabilityReader,

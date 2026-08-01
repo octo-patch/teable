@@ -9,19 +9,11 @@ import {
   type Table,
   type TableRecord,
 } from '@teable/v2-core';
-import {
-  sql,
-  type AliasedRawBuilder,
-  type Expression,
-  type Kysely,
-  type RawBuilder,
-  type SqlBool,
-} from 'kysely';
+import { sql, type AliasedRawBuilder, type Expression, type Kysely, type SqlBool } from 'kysely';
 import type { Result } from 'neverthrow';
 import { err, ok, safeTry } from 'neverthrow';
 
 import { TableRecordConditionWhereVisitor } from '../../visitors';
-import { buildDateLikeOrderExpression } from '../dateLikeOrderBy';
 import type {
   DynamicDB,
   IQueryBuilderDeps,
@@ -30,18 +22,19 @@ import type {
   QB,
 } from '../ITableRecordQueryBuilder';
 import type { QueryMode } from '../TableRecordQueryBuilderManager';
+import {
+  buildStoredFieldOrderByClauses,
+  type StoredFieldOrderByClause,
+} from './storedFieldOrderBy';
 import { StoredFieldSelectVisitor } from './StoredFieldSelectVisitor';
+import { buildStoredFieldValueExpression } from './storedFieldValueExpression';
 
 const T = 't'; // main table alias
 
 type ResolvedOrderBy = {
   column: string;
   direction: 'asc' | 'desc';
-  expression?: RawBuilder<unknown>;
-  userLikeMode?: 'single' | 'multiple';
-  userLikeSource?: 'field' | 'system';
-  selectChoiceMode?: 'single' | 'multiple';
-  selectChoiceOrder?: ReadonlyArray<string>;
+  clauses?: ReadonlyArray<StoredFieldOrderByClause>;
 };
 
 export interface IStoredQueryBuilderOptions {
@@ -171,27 +164,15 @@ export class StoredTableRecordQueryBuilder implements ITableRecordQueryBuilder {
           );
 
         for (const orderBy of resolvedOrderBy) {
-          if (orderBy.selectChoiceMode && orderBy.selectChoiceOrder?.length) {
-            query = this.applySelectChoiceOrderBy(
-              query,
-              orderBy.column,
-              orderBy.direction,
-              orderBy.selectChoiceMode,
-              orderBy.selectChoiceOrder
-            );
-          } else if (orderBy.userLikeMode) {
-            query = this.applyUserLikeOrderBy(
-              query,
-              orderBy.column,
-              orderBy.direction,
-              orderBy.userLikeMode,
-              orderBy.userLikeSource ?? 'field'
-            );
+          if (orderBy.clauses) {
+            for (const clause of orderBy.clauses) {
+              query = query.orderBy(clause.expression, clause.direction);
+            }
           } else {
             // Align null ordering with v1: ASC => nulls first, DESC => nulls last.
             // Without this, PostgreSQL defaults to ASC NULLS LAST / DESC NULLS FIRST,
             // which is the opposite of v1, causing row offset mismatches during paste.
-            const columnRef = orderBy.expression ?? sql`${sql.ref(`${T}.${orderBy.column}`)}`;
+            const columnRef = sql`${sql.ref(`${T}.${orderBy.column}`)}`;
             const nullOrderDirection: 'asc' | 'desc' = orderBy.direction === 'asc' ? 'desc' : 'asc';
             query = query
               .orderBy(sql`${columnRef} is null`, nullOrderDirection)
@@ -236,229 +217,40 @@ export class StoredTableRecordQueryBuilder implements ITableRecordQueryBuilder {
         .getField((f) => f.id().equals(orderByColumn as FieldId))
         .andThen((field) => {
           const fieldType = field.type();
-          const isUserLike =
-            fieldType.equals(FieldType.user()) ||
-            fieldType.equals(FieldType.link()) ||
-            fieldType.equals(FieldType.createdBy()) ||
-            fieldType.equals(FieldType.lastModifiedBy());
-          const resolveDateLikeOrderBy = (column: string) => {
-            const expression = buildDateLikeOrderExpression(field, T, column);
-            return ok(expression ? { column, direction, expression } : { column, direction });
-          };
-
-          if (fieldType.equals(FieldType.createdTime())) {
-            return resolveDateLikeOrderBy('__created_time');
-          }
-          if (fieldType.equals(FieldType.lastModifiedTime())) {
-            return resolveDateLikeOrderBy('__last_modified_time');
-          }
-          if (fieldType.equals(FieldType.createdBy())) {
-            return ok({
-              column: '__created_by',
-              direction,
-              userLikeMode: 'single',
-              userLikeSource: 'system',
-            });
-          }
-          if (fieldType.equals(FieldType.lastModifiedBy())) {
-            return ok({
-              column: '__last_modified_by',
-              direction,
-              userLikeMode: 'single',
-              userLikeSource: 'system',
-            });
-          }
-          if (fieldType.equals(FieldType.autoNumber())) {
-            return ok({ column: '__auto_number', direction });
-          }
-
-          const selectChoiceOrder = this.extractSelectChoiceOrder(field);
-          const multiplicityResult = isUserLike ? field.isMultipleCellValue() : undefined;
-          if (multiplicityResult?.isErr()) {
-            return err(multiplicityResult.error);
-          }
-          const multiplicity = multiplicityResult?.isOk() ? multiplicityResult.value : undefined;
-          return field.dbFieldName().andThen((dbFieldName) =>
-            dbFieldName.value().map((column) => ({
-              column,
-              direction,
-              expression: buildDateLikeOrderExpression(field, T, column) ?? undefined,
-              ...(isUserLike
-                ? {
-                    userLikeMode: (multiplicity?.isMultiple() ? 'multiple' : 'single') as Exclude<
-                      ResolvedOrderBy['userLikeMode'],
-                      undefined
-                    >,
-                    userLikeSource: 'field' as const,
-                  }
-                : {}),
-              ...(selectChoiceOrder
-                ? {
-                    selectChoiceMode: selectChoiceOrder.mode,
-                    selectChoiceOrder: selectChoiceOrder.values,
-                  }
-                : {}),
-            }))
+          const systemColumn = fieldType.equals(FieldType.createdTime())
+            ? '__created_time'
+            : fieldType.equals(FieldType.lastModifiedTime())
+              ? '__last_modified_time'
+              : fieldType.equals(FieldType.createdBy())
+                ? '__created_by'
+                : fieldType.equals(FieldType.lastModifiedBy())
+                  ? '__last_modified_by'
+                  : fieldType.equals(FieldType.autoNumber())
+                    ? '__auto_number'
+                    : undefined;
+          const columnResult = systemColumn
+            ? ok(systemColumn)
+            : field.dbFieldName().andThen((dbFieldName) => dbFieldName.value());
+          return columnResult.andThen((column) =>
+            buildStoredFieldValueExpression(field, T, column).andThen(
+              ({ expression, usesErrorFallback }) =>
+                buildStoredFieldOrderByClauses(
+                  field,
+                  column,
+                  direction,
+                  T,
+                  usesErrorFallback ? expression : undefined
+                ).map((clauses) => ({
+                  column,
+                  direction,
+                  clauses,
+                }))
+            )
           );
         });
     }
 
     return ok({ column: orderByColumn, direction });
-  }
-
-  private extractSelectChoiceOrder(
-    field: unknown
-  ): { mode: 'single' | 'multiple'; values: string[] } | undefined {
-    const candidate = field as {
-      type?: () => { equals: (other: unknown) => boolean };
-      selectOptions?: () => ReadonlyArray<{ name: () => { toString: () => string } }>;
-      innerField?: () => { isOk: () => boolean; value: unknown };
-      isMultipleCellValue?: () => { isOk: () => boolean; value: { isMultiple: () => boolean } };
-    };
-    const fieldType = candidate.type?.();
-    if (!fieldType) {
-      return undefined;
-    }
-
-    const toChoiceNames = (
-      options: ReadonlyArray<{ name: () => { toString: () => string } }> | undefined
-    ): string[] | undefined => {
-      if (!options?.length) {
-        return undefined;
-      }
-      const names = options.map((option) => option.name().toString()).filter(Boolean);
-      return names.length ? names : undefined;
-    };
-
-    if (
-      fieldType.equals(FieldType.singleSelect()) ||
-      fieldType.equals(FieldType.multipleSelect())
-    ) {
-      const values = toChoiceNames(candidate.selectOptions?.());
-      if (!values) {
-        return undefined;
-      }
-      return {
-        mode: fieldType.equals(FieldType.multipleSelect()) ? 'multiple' : 'single',
-        values,
-      };
-    }
-
-    if (fieldType.equals(FieldType.lookup())) {
-      const innerFieldResult = candidate.innerField?.();
-      if (!innerFieldResult?.isOk()) {
-        return undefined;
-      }
-      const innerField = innerFieldResult.value as {
-        type?: () => { equals: (other: unknown) => boolean };
-        selectOptions?: () => ReadonlyArray<{ name: () => { toString: () => string } }>;
-      };
-      const innerType = innerField.type?.();
-      if (!innerType) {
-        return undefined;
-      }
-      if (
-        !innerType.equals(FieldType.singleSelect()) &&
-        !innerType.equals(FieldType.multipleSelect())
-      ) {
-        return undefined;
-      }
-      const values = toChoiceNames(innerField.selectOptions?.());
-      if (!values) {
-        return undefined;
-      }
-      // Lookup values are usually arrays; prefer multiple mode unless we know it is single-valued.
-      let mode: 'single' | 'multiple' = 'multiple';
-      const multiplicityResult = candidate.isMultipleCellValue?.();
-      const multiplicity = multiplicityResult?.isOk() ? multiplicityResult.value : undefined;
-      if (
-        innerType.equals(FieldType.singleSelect()) &&
-        multiplicity &&
-        !multiplicity.isMultiple()
-      ) {
-        mode = 'single';
-      }
-      return { mode, values };
-    }
-
-    return undefined;
-  }
-
-  /**
-   * Align user/link ordering with v1:
-   * - single: sort by `title`
-   * - multiple: sort by `titles[]` text projection
-   * - null ordering: ASC => null first, DESC => null last
-   */
-  private applyUserLikeOrderBy(
-    query: QB,
-    column: string,
-    direction: 'asc' | 'desc',
-    mode: 'single' | 'multiple',
-    source: 'field' | 'system'
-  ): QB {
-    const columnRef = sql.ref(`${T}.${column}`);
-    // Keep v1 parity for user/link fields: cast stored value to jsonb and sort by title.
-    // System fields (createdBy/lastModifiedBy) may be scalar strings, so keep to_jsonb().
-    const columnJson = source === 'field' ? sql`${columnRef}::jsonb` : sql`to_jsonb(${columnRef})`;
-    const arrayLikeColumnJson =
-      source === 'field'
-        ? sql`CASE
-            WHEN jsonb_typeof(${columnJson}) = 'array' THEN ${columnJson}
-            WHEN jsonb_typeof(${columnJson}) = 'object' THEN jsonb_build_array(${columnJson})
-            ELSE '[]'::jsonb
-          END`
-        : sql`CASE
-            WHEN jsonb_typeof(${columnJson}) = 'array' THEN ${columnJson}
-            ELSE '[]'::jsonb
-          END`;
-    const titleExpr =
-      mode === 'multiple'
-        ? sql`jsonb_path_query_array(${arrayLikeColumnJson}, '$[*].title')::text`
-        : source === 'field'
-          ? sql`${columnJson} ->> 'title'`
-          : sql`coalesce(${columnJson} ->> 'title', ${columnJson} ->> 'name', ${columnJson} #>> '{}')`;
-
-    const nullOrderDirection: 'asc' | 'desc' = direction === 'asc' ? 'desc' : 'asc';
-
-    return query
-      .orderBy(sql`${titleExpr} is null`, nullOrderDirection)
-      .orderBy(titleExpr, direction);
-  }
-
-  private applySelectChoiceOrderBy(
-    query: QB,
-    column: string,
-    direction: 'asc' | 'desc',
-    mode: 'single' | 'multiple',
-    choiceOrder: ReadonlyArray<string>
-  ): QB {
-    const columnRef = sql.ref(`${T}.${column}`);
-    const choiceArrayLiteral = sql`ARRAY[${sql.join(
-      choiceOrder.map((name) => sql`${name}`),
-      sql`, `
-    )}]`;
-
-    const choiceIndexExpr =
-      mode === 'multiple'
-        ? sql`CASE
-            WHEN ${columnRef} IS NULL THEN NULL
-            WHEN jsonb_typeof(${columnRef}::jsonb) = 'array'
-              THEN ARRAY_POSITION(${choiceArrayLiteral}, jsonb_path_query_first(${columnRef}::jsonb, '$[0]') #>> '{}')
-            ELSE ARRAY_POSITION(${choiceArrayLiteral}, ${columnRef}::text)
-          END`
-        : sql`ARRAY_POSITION(${choiceArrayLiteral}, ${columnRef}::text)`;
-
-    const nullOrderDirection: 'asc' | 'desc' = direction === 'asc' ? 'desc' : 'asc';
-    let ordered = query
-      .orderBy(sql`${choiceIndexExpr} is null`, nullOrderDirection)
-      .orderBy(choiceIndexExpr, direction);
-
-    if (mode === 'multiple') {
-      ordered = ordered.orderBy(sql`${columnRef}::jsonb::text`, direction);
-    }
-
-    return ordered;
   }
 
   private buildWhereCondition(): Result<Expression<SqlBool> | null, DomainError> {

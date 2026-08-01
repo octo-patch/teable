@@ -1755,9 +1755,7 @@ export class ComputedUpdateOutbox implements IComputedUpdateOutbox {
             .updateTable(OUTBOX_TABLE)
             .set({
               status: DEFAULT_STATUS,
-              ...(mergeLockAcquired
-                ? {}
-                : { plan_hash: uniquifyPlanHash(params.task.planHash) }),
+              ...(mergeLockAcquired ? {} : { plan_hash: uniquifyPlanHash(params.task.planHash) }),
               next_run_at: nextRunAt,
               last_error: params.reason,
               locked_at: null,
@@ -2050,6 +2048,7 @@ export class ComputedUpdateOutbox implements IComputedUpdateOutbox {
           dirtyStats: task.dirtyStats,
           beforeImageRecords: task.beforeImageRecords,
           seedAllTableIds: seedAllTableIds.length > 0 ? seedAllTableIds : undefined,
+          sameTableBatches: task.sameTableBatches,
           orchestration: task.orchestration,
         }),
         run_id: task.runId,
@@ -2132,6 +2131,7 @@ export class ComputedUpdateOutbox implements IComputedUpdateOutbox {
           seedAllTableIds:
             seedAllTableIds && seedAllTableIds.length > 0 ? seedAllTableIds : undefined,
           orchestration: mergedOrchestration,
+          sameTableBatches: task.sameTableBatches ?? parseSameTableBatchDtos(existing.dirty_stats),
         }),
         run_id: mergedRunId,
         origin_run_ids: mergedOriginRunIds,
@@ -2563,6 +2563,7 @@ const toOutboxItem = (
     extraSeedRecords,
     beforeImageRecords: parseBeforeImageRecordDtos(row.dirty_stats),
     steps: parseJsonArray(row.steps) ?? [],
+    sameTableBatches: parseSameTableBatchDtos(row.dirty_stats),
     edges: parseJsonArray(row.edges) ?? [],
     estimatedComplexity: Number(row.estimated_complexity ?? 0),
     changeType: String(row.change_type) as ComputedUpdateOutboxItem['changeType'],
@@ -2667,6 +2668,14 @@ const parseBeforeImageRecordDtos = (
     .filter(
       (item): item is ComputedUpdateOutboxItem['beforeImageRecords'][number] => item !== null
     );
+};
+
+const parseSameTableBatchDtos = (value: unknown): ComputedUpdateOutboxItem['sameTableBatches'] => {
+  const parsed = parseJsonValue(value);
+  if (Array.isArray(parsed) || parsed == null || typeof parsed !== 'object') return undefined;
+  const raw = (parsed as { sameTableBatches?: unknown }).sameTableBatches;
+  if (!Array.isArray(raw)) return undefined;
+  return raw as ComputedUpdateOutboxItem['sameTableBatches'];
 };
 
 const parseSeedAllTableIds = (value: unknown): string[] | undefined => {
@@ -2822,6 +2831,7 @@ const computedOutboxItemToTaskInput = (
   beforeImageRecords: task.beforeImageRecords,
   steps: task.steps,
   edges: task.edges,
+  sameTableBatches: task.sameTableBatches,
   estimatedComplexity: task.estimatedComplexity,
   changeType: task.changeType,
   runId: task.runId,
@@ -3332,6 +3342,7 @@ const buildDeadLetterValues = (
       dirtyStats: computedTask.dirtyStats,
       beforeImageRecords: computedTask.beforeImageRecords,
       orchestration: computedTask.orchestration,
+      sameTableBatches: computedTask.sameTableBatches,
     }),
     origin_run_ids: computedTask.originRunIds,
     run_total_steps: computedTask.runTotalSteps,

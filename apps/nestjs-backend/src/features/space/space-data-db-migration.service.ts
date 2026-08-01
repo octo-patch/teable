@@ -681,6 +681,7 @@ const sharedTables = {
   recordHistory: 'record_history',
   tableTrash: 'table_trash',
   recordTrash: 'record_trash',
+  recordRemovalTombstone: 'record_removal_tombstone',
   computedUpdateOutbox: 'computed_update_outbox',
   computedUpdateDeadLetter: 'computed_update_dead_letter',
   computedUpdateOutboxSeed: 'computed_update_outbox_seed',
@@ -2565,7 +2566,8 @@ export class SpaceDataDbMigrationService {
     if (
       row.tableName === sharedTables.recordHistory ||
       row.tableName === sharedTables.tableTrash ||
-      row.tableName === sharedTables.recordTrash
+      row.tableName === sharedTables.recordTrash ||
+      row.tableName === sharedTables.recordRemovalTombstone
     ) {
       return typeof payload.table_id === 'string' && tableScopeIds.has(payload.table_id);
     }
@@ -4625,6 +4627,7 @@ export class SpaceDataDbMigrationService {
     pushTableScoped(sharedTables.recordHistory);
     pushTableScoped(sharedTables.tableTrash);
     pushTableScoped(sharedTables.recordTrash);
+    pushTableScoped(sharedTables.recordRemovalTombstone);
     pushBaseScoped(sharedTables.computedUpdateOutbox);
     pushBaseScoped(sharedTables.computedUpdateDeadLetter);
 
@@ -6615,6 +6618,14 @@ export class SpaceDataDbMigrationService {
       client,
       conflicts,
       internalSchema,
+      sharedTables.recordRemovalTombstone,
+      inventory.sharedTableIds.length ? `"table_id" = ANY(?::text[])` : '',
+      [inventory.sharedTableIds]
+    );
+    await this.pushConflictCount(
+      client,
+      conflicts,
+      internalSchema,
       sharedTables.computedUpdateOutbox,
       inventory.baseIds.length ? `"base_id" = ANY(?::text[])` : '',
       [inventory.baseIds]
@@ -6877,6 +6888,7 @@ export class SpaceDataDbMigrationService {
       [sharedTables.computedUpdateOutbox, 5],
       [sharedTables.computedUpdatePauseScope, 6],
       [sharedTables.undoLog, 7],
+      [sharedTables.recordRemovalTombstone, 8],
     ]);
     return [...plans].sort((left, right) => {
       const leftPriority = priority.get(left.table) ?? Number.MAX_SAFE_INTEGER;
@@ -7396,6 +7408,7 @@ export class SpaceDataDbMigrationService {
     pushTableScoped(sharedTables.recordHistory);
     pushTableScoped(sharedTables.tableTrash);
     pushTableScoped(sharedTables.recordTrash);
+    pushTableScoped(sharedTables.recordRemovalTombstone);
     pushBaseScoped(sharedTables.computedUpdateOutbox);
     pushBaseScoped(sharedTables.computedUpdateDeadLetter);
 

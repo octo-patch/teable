@@ -28,7 +28,11 @@ import {
   toUndoRedoStackAppendContext,
   UndoRedoStackService,
 } from '../application/services/UndoRedoStackService';
-import { domainError, type DomainError } from '../domain/shared/DomainError';
+import {
+  domainError,
+  type DomainError,
+  type IDomainErrorLocalization,
+} from '../domain/shared/DomainError';
 import type { IDomainEvent } from '../domain/shared/DomainEvent';
 import { generateUuid } from '../domain/shared/IdGenerator';
 import { OffsetPagination } from '../domain/shared/pagination/OffsetPagination';
@@ -273,6 +277,7 @@ export interface PasteStreamErrorEvent {
   recordIds: string[];
   message: string;
   code?: string;
+  localization?: IDomainErrorLocalization;
 }
 
 export type PasteStreamEvent =
@@ -3252,6 +3257,7 @@ export class PasteStreamApplicationService extends PasteHandler {
       recordIds: summary.recordIds,
       message: error.message,
       code: error.code,
+      ...(error.localization && { localization: error.localization }),
     };
   }
 }

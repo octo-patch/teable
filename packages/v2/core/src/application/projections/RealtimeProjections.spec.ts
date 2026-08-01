@@ -16,6 +16,20 @@ import { RecordsDeleted } from '../../domain/table/events/RecordsDeleted';
 import { RecordUpdated } from '../../domain/table/events/RecordUpdated';
 import { TableCreated } from '../../domain/table/events/TableCreated';
 import { ViewColumnMetaUpdated } from '../../domain/table/events/ViewColumnMetaUpdated';
+import { ViewDeleted } from '../../domain/table/events/ViewDeleted';
+import { ViewDescriptionUpdated } from '../../domain/table/events/ViewDescriptionUpdated';
+import { ViewFilterUpdated } from '../../domain/table/events/ViewFilterUpdated';
+import { ViewGroupUpdated } from '../../domain/table/events/ViewGroupUpdated';
+import { ViewLockedUpdated } from '../../domain/table/events/ViewLockedUpdated';
+import { ViewManualSortApplied } from '../../domain/table/events/ViewManualSortApplied';
+import { ViewOptionsUpdated } from '../../domain/table/events/ViewOptionsUpdated';
+import { ViewOrderUpdated } from '../../domain/table/events/ViewOrderUpdated';
+import { ViewRenamed } from '../../domain/table/events/ViewRenamed';
+import { ViewShareDisabled } from '../../domain/table/events/ViewShareDisabled';
+import { ViewShareEnabled } from '../../domain/table/events/ViewShareEnabled';
+import { ViewShareIdRefreshed } from '../../domain/table/events/ViewShareIdRefreshed';
+import { ViewShareMetaUpdated } from '../../domain/table/events/ViewShareMetaUpdated';
+import { ViewSortUpdated } from '../../domain/table/events/ViewSortUpdated';
 import { FieldId } from '../../domain/table/fields/FieldId';
 import { FieldName } from '../../domain/table/fields/FieldName';
 import { LinkFieldConfig } from '../../domain/table/fields/types/LinkFieldConfig';
@@ -27,11 +41,14 @@ import { SelectOption } from '../../domain/table/fields/types/SelectOption';
 import { RecordId } from '../../domain/table/records/RecordId';
 import { TableAddSelectOptionsSpec } from '../../domain/table/specs/TableAddSelectOptionsSpec';
 import { TableUpdateFieldTypeSpec } from '../../domain/table/specs/TableUpdateFieldTypeSpec';
+import { TableUpdateViewShareIdSpec } from '../../domain/table/specs/TableUpdateViewShareIdSpec';
 import { TableEventGeneratingSpecVisitor } from '../../domain/table/specs/visitors/TableEventGeneratingSpecVisitor';
 import { Table } from '../../domain/table/Table';
 import { TableId } from '../../domain/table/TableId';
 import { TableName } from '../../domain/table/TableName';
 import { ViewId } from '../../domain/table/views/ViewId';
+import { ViewName } from '../../domain/table/views/ViewName';
+import { ViewOrder } from '../../domain/table/views/ViewOrder';
 import type { IAttachmentUrlSignerService } from '../../ports/AttachmentUrlSignerService';
 import { createEventDispatchScope } from '../../ports/EventHandler';
 import type { IExecutionContext } from '../../ports/ExecutionContext';
@@ -57,6 +74,22 @@ import { setRealtimeProjectionSchedulerForTest } from './scheduleRealtimeProject
 import { TableCreatedRealtimeProjection } from './TableCreatedRealtimeProjection';
 import { buildRecordCollection } from './TableRecordRealtimeDTO';
 import { ViewColumnMetaUpdatedRealtimeProjection } from './ViewColumnMetaUpdatedRealtimeProjection';
+import { ViewDeletedRealtimeProjection } from './ViewDeletedRealtimeProjection';
+import { ViewDescriptionUpdatedRealtimeProjection } from './ViewDescriptionUpdatedRealtimeProjection';
+import { ViewFilterUpdatedRealtimeProjection } from './ViewFilterUpdatedRealtimeProjection';
+import { ViewGroupUpdatedRealtimeProjection } from './ViewGroupUpdatedRealtimeProjection';
+import { ViewLockedUpdatedRealtimeProjection } from './ViewLockedUpdatedRealtimeProjection';
+import { ViewManualSortAppliedRealtimeProjection } from './ViewManualSortAppliedRealtimeProjection';
+import { ViewOptionsUpdatedRealtimeProjection } from './ViewOptionsUpdatedRealtimeProjection';
+import { ViewOrderUpdatedRealtimeProjection } from './ViewOrderUpdatedRealtimeProjection';
+import { ViewRenamedRealtimeProjection } from './ViewRenamedRealtimeProjection';
+import { ViewShareIdRefreshedRealtimeProjection } from './ViewShareIdRefreshedRealtimeProjection';
+import { ViewShareMetaUpdatedRealtimeProjection } from './ViewShareMetaUpdatedRealtimeProjection';
+import {
+  ViewShareDisabledRealtimeProjection,
+  ViewShareEnabledRealtimeProjection,
+} from './ViewShareStateRealtimeProjection';
+import { ViewSortUpdatedRealtimeProjection } from './ViewSortUpdatedRealtimeProjection';
 
 const fieldUpdateSemantics = {
   type: {
@@ -134,6 +167,7 @@ class FakeRealtimeEngine implements IRealtimeEngine {
     options?: RealtimeApplyChangeOptions;
   }> = [];
   deletes: RealtimeDocId[] = [];
+  invalidations: Array<{ collection: string; change: RealtimeChange }> = [];
 
   async ensure(_context: IExecutionContext, docId: RealtimeDocId, initial: unknown) {
     this.ensures.push({ docId, initial });
@@ -152,6 +186,15 @@ class FakeRealtimeEngine implements IRealtimeEngine {
 
   async delete(_context: IExecutionContext, docId: RealtimeDocId) {
     this.deletes.push(docId);
+    return ok(undefined);
+  }
+
+  async invalidateCollection(
+    _context: IExecutionContext,
+    collection: string,
+    change: RealtimeChange
+  ) {
+    this.invalidations.push({ collection, change });
     return ok(undefined);
   }
 }
@@ -184,6 +227,10 @@ class FakeTableRepository implements ITableRepository {
   }
 
   async updateOne() {
+    return ok(undefined);
+  }
+
+  async restore() {
     return ok(undefined);
   }
 
@@ -530,6 +577,35 @@ describe('Realtime projections', () => {
     });
   });
 
+  it('invalidates the record collection after View manual sort materializes row order', async () => {
+    const table = buildTable('2', '5', '7');
+    const viewId = table.views()[0]!.id();
+    const engine = new FakeRealtimeEngine();
+    const projection = new ViewManualSortAppliedRealtimeProjection(engine);
+    const event = ViewManualSortApplied.create({
+      baseId: table.baseId(),
+      tableId: table.id(),
+      viewId,
+      sort: [{ fieldId: table.primaryFieldId().toString(), order: 'asc' }],
+    });
+
+    const result = await projection.handle(createContext(), event);
+    result._unsafeUnwrap();
+
+    expect(engine.invalidations).toEqual([
+      {
+        collection: buildRecordCollection(table.id().toString()),
+        change: {
+          type: 'set',
+          path: ['fields', viewId.toRowOrderColumnName()],
+          value: null,
+          oldValue: null,
+        },
+      },
+    ]);
+    expect(engine.changes).toHaveLength(0);
+  });
+
   it('projects batch record creations', async () => {
     const table = buildTable('1', '2', '3');
     const engine = new FakeRealtimeEngine();
@@ -646,6 +722,7 @@ describe('Realtime projections', () => {
       },
       applyChange: async () => ok(undefined),
       delete: async () => ok(undefined),
+      invalidateCollection: async () => ok(undefined),
     };
     const projection = new RecordsBatchCreatedRealtimeProjection(engine);
 
@@ -701,6 +778,7 @@ describe('Realtime projections', () => {
       },
       applyChange: async () => ok(undefined),
       delete: async () => ok(undefined),
+      invalidateCollection: async () => ok(undefined),
     };
     const projection = new RecordsBatchCreatedRealtimeProjection(engine);
 
@@ -827,6 +905,7 @@ describe('Realtime projections', () => {
         });
         return ok(undefined);
       },
+      invalidateCollection: async () => ok(undefined),
     };
     const projection = new RecordsDeletedRealtimeProjection(engine);
 
@@ -883,6 +962,7 @@ describe('Realtime projections', () => {
         inFlight -= 1;
         return ok(undefined);
       },
+      invalidateCollection: async () => ok(undefined),
     };
     const projection = new RecordsBatchUpdatedRealtimeProjection(engine);
 
@@ -1013,6 +1093,761 @@ describe('Realtime projections', () => {
     expect(engine.deletes).toHaveLength(1);
   });
 
+  it('projects View deletion to the Table document and removes the View document', async () => {
+    const originalTable = buildTable('v', 'w', 'x');
+    const createResult = originalTable.createView({ type: 'grid', name: 'Temporary' });
+    const tableWithView = createResult._unsafeUnwrap().updateResult.table;
+    const deletedViewId = createResult._unsafeUnwrap().view.id();
+    const table = tableWithView.deleteView(deletedViewId)._unsafeUnwrap().updateResult.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(table);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewDeletedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewDeleted.create({
+      baseId: table.baseId(),
+      tableId: table.id(),
+      viewId: deletedViewId,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    expect(realtimeTasks).toHaveLength(1);
+    await realtimeTasks[0]!();
+
+    expect(engine.ensures[0]?.docId.toString()).toBe(
+      `tbl_${table.baseId().toString()}/${table.id().toString()}`
+    );
+    expect(engine.changes[0]?.change).toMatchObject({
+      type: 'set',
+      path: ['views'],
+    });
+    expect(engine.deletes[0]?.toString()).toBe(
+      `viw_${table.id().toString()}/${deletedViewId.toString()}`
+    );
+  });
+
+  it('projects View rename to the Table and standalone View documents with persisted version', async () => {
+    const originalTable = buildTable('r', 's', 't');
+    const targetView = originalTable.views()[0]!;
+    const renamed = originalTable
+      .renameView(targetView.id(), ViewName.create('Renamed view')._unsafeUnwrap())
+      ._unsafeUnwrap().updateResult.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(renamed);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewRenamedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewRenamed.create({
+      baseId: renamed.baseId(),
+      tableId: renamed.id(),
+      viewId: targetView.id(),
+      previousName: targetView.name(),
+      nextName: ViewName.create('Renamed view')._unsafeUnwrap(),
+      oldVersion: 11,
+      newVersion: 12,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    expect(realtimeTasks).toHaveLength(1);
+    await realtimeTasks[0]!();
+
+    expect(engine.ensures.map(({ docId }) => docId.toString())).toEqual([
+      `tbl_${renamed.baseId().toString()}/${renamed.id().toString()}`,
+      `viw_${renamed.id().toString()}/${targetView.id().toString()}`,
+    ]);
+    expect(engine.changes[0]).toMatchObject({
+      docId: expect.objectContaining({}),
+      change: {
+        type: 'set',
+        path: ['views', 0, 'name'],
+        value: 'Renamed view',
+      },
+    });
+    expect(engine.changes[0]?.docId.toString()).toBe(
+      `tbl_${renamed.baseId().toString()}/${renamed.id().toString()}`
+    );
+    expect(engine.changes[1]?.docId.toString()).toBe(
+      `viw_${renamed.id().toString()}/${targetView.id().toString()}`
+    );
+    expect(engine.changes[1]?.change).toEqual({
+      type: 'set',
+      path: ['name'],
+      value: 'Renamed view',
+    });
+    expect(engine.changes[1]?.options).toEqual({ version: 11 });
+  });
+
+  it('projects View description to Table and standalone View documents with persisted version', async () => {
+    const originalTable = buildTable('u', 'v', 'w');
+    const targetView = originalTable.views()[0]!;
+    const updated = originalTable
+      .updateViewDescription(targetView.id(), 'Updated description')
+      ._unsafeUnwrap().updateResult.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewDescriptionUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewDescriptionUpdated.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousDescription: undefined,
+      nextDescription: 'Updated description',
+      oldVersion: 12,
+      newVersion: 13,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    expect(realtimeTasks).toHaveLength(1);
+    await realtimeTasks[0]!();
+
+    expect(engine.ensures.map(({ docId }) => docId.toString())).toEqual([
+      `tbl_${updated.baseId().toString()}/${updated.id().toString()}`,
+      `viw_${updated.id().toString()}/${targetView.id().toString()}`,
+    ]);
+    expect(engine.changes[0]).toMatchObject({
+      change: {
+        type: 'set',
+        path: ['views', 0, 'description'],
+        value: 'Updated description',
+      },
+    });
+    expect(engine.changes[1]?.change).toEqual({
+      type: 'set',
+      path: ['description'],
+      value: 'Updated description',
+    });
+    expect(engine.changes[1]?.options).toEqual({ version: 12 });
+  });
+
+  it('projects View filter query defaults to Table and standalone View documents', async () => {
+    const originalTable = buildTable('f', 'g', 'h');
+    const targetView = originalTable.views()[0]!;
+    const filter = {
+      conjunction: 'and' as const,
+      filterSet: [
+        {
+          fieldId: originalTable.primaryFieldId().toString(),
+          operator: 'is' as const,
+          value: 'alpha',
+        },
+      ],
+    };
+    const query = {
+      filter: {
+        conjunction: 'and',
+        items: [
+          {
+            fieldId: originalTable.primaryFieldId().toString(),
+            operator: 'is',
+            value: 'alpha',
+          },
+        ],
+      },
+    };
+    const updated = originalTable.updateViewFilter(targetView.id(), filter)._unsafeUnwrap()
+      .updateResult!.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewFilterUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewFilterUpdated.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousFilter: undefined,
+      nextFilter: filter,
+      oldVersion: 13,
+      newVersion: 14,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    expect(realtimeTasks).toHaveLength(1);
+    await realtimeTasks[0]!();
+
+    expect(engine.ensures.map(({ docId }) => docId.toString())).toEqual([
+      `tbl_${updated.baseId().toString()}/${updated.id().toString()}`,
+      `viw_${updated.id().toString()}/${targetView.id().toString()}`,
+    ]);
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'query'],
+        value: query,
+      },
+      {
+        type: 'set',
+        path: ['views', 0, 'sourceFilter'],
+        value: filter,
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['query'],
+        value: query,
+      },
+      {
+        type: 'set',
+        path: ['sourceFilter'],
+        value: filter,
+      },
+    ]);
+    expect(engine.changes[1]?.options).toEqual({ version: 13 });
+  });
+
+  it('projects View sort query defaults to Table and standalone View documents', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const sort = {
+      sortObjs: [{ fieldId: originalTable.primaryFieldId().toString(), order: 'desc' as const }],
+      manualSort: false,
+    };
+    const updated = originalTable.updateViewSort(targetView.id(), sort)._unsafeUnwrap()
+      .updateResult!.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewSortUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewSortUpdated.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousSort: null,
+      nextSort: sort,
+      oldVersion: 13,
+      newVersion: 14,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    expect(realtimeTasks).toHaveLength(1);
+    await realtimeTasks[0]!();
+
+    const query = { sort: sort.sortObjs, manualSort: false };
+    expect(engine.ensures.map(({ docId }) => docId.toString())).toEqual([
+      `tbl_${updated.baseId().toString()}/${updated.id().toString()}`,
+      `viw_${updated.id().toString()}/${targetView.id().toString()}`,
+    ]);
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'query'],
+        value: query,
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['query'],
+        value: query,
+      },
+    ]);
+    expect(engine.changes[1]?.options).toEqual({ version: 13 });
+  });
+
+  it('projects View group query defaults to Table and standalone View documents', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const group = [{ fieldId: originalTable.primaryFieldId().toString(), order: 'desc' as const }];
+    const updated = originalTable.updateViewGroup(targetView.id(), group)._unsafeUnwrap()
+      .updateResult!.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewGroupUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewGroupUpdated.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousGroup: null,
+      nextGroup: group,
+      oldVersion: 14,
+      newVersion: 15,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    expect(realtimeTasks).toHaveLength(1);
+    await realtimeTasks[0]!();
+
+    const query = { group };
+    expect(engine.ensures.map(({ docId }) => docId.toString())).toEqual([
+      `tbl_${updated.baseId().toString()}/${updated.id().toString()}`,
+      `viw_${updated.id().toString()}/${targetView.id().toString()}`,
+    ]);
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'query'],
+        value: query,
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['query'],
+        value: query,
+      },
+    ]);
+    expect(engine.changes[1]?.options).toEqual({ version: 14 });
+  });
+
+  it('projects View options to Table and standalone View documents', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const nextOptions = { rowHeight: 'tall', fieldNameDisplayLines: 2 };
+    const updated = originalTable.updateViewOptions(targetView.id(), nextOptions)._unsafeUnwrap()
+      .updateResult!.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewOptionsUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewOptionsUpdated.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousOptions: undefined,
+      nextOptions,
+      oldVersion: 15,
+      newVersion: 16,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    expect(realtimeTasks).toHaveLength(1);
+    await realtimeTasks[0]!();
+
+    expect(engine.ensures.map(({ docId }) => docId.toString())).toEqual([
+      `tbl_${updated.baseId().toString()}/${updated.id().toString()}`,
+      `viw_${updated.id().toString()}/${targetView.id().toString()}`,
+    ]);
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'options'],
+        value: nextOptions,
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['options'],
+        value: nextOptions,
+      },
+    ]);
+    expect(engine.changes[1]?.options).toEqual({ version: 15 });
+  });
+
+  it('projects View share metadata to Table and standalone View documents', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const nextShareMeta = { allowCopy: true, submit: { requireLogin: true } };
+    const updated = originalTable
+      .updateViewShareMeta(targetView.id(), nextShareMeta)
+      ._unsafeUnwrap().updateResult!.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewShareMetaUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewShareMetaUpdated.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousShareMeta: undefined,
+      nextShareMeta,
+      oldVersion: 16,
+      newVersion: 17,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    await realtimeTasks[0]!();
+
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'shareMeta'],
+        value: nextShareMeta,
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['shareMeta'],
+        value: nextShareMeta,
+      },
+    ]);
+    expect(engine.changes[1]?.options).toEqual({ version: 16 });
+  });
+
+  it('projects only the current View share password metadata after replacement', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const previousShareMeta = { password: 'previous-password', allowCopy: false };
+    const nextShareMeta = { password: 'current-password', allowCopy: true };
+    const withPreviousShareMeta = originalTable
+      .updateViewShareMeta(targetView.id(), previousShareMeta)
+      ._unsafeUnwrap().updateResult!.table;
+    const updated = withPreviousShareMeta
+      .updateViewShareMeta(targetView.id(), nextShareMeta)
+      ._unsafeUnwrap().updateResult!.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewShareMetaUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewShareMetaUpdated.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousShareMeta,
+      nextShareMeta,
+      oldVersion: 17,
+      newVersion: 18,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    await realtimeTasks[0]!();
+
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'shareMeta'],
+        value: nextShareMeta,
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['shareMeta'],
+        value: nextShareMeta,
+      },
+    ]);
+    expect(
+      JSON.stringify({
+        ensures: engine.ensures.map(({ initial }) => initial),
+        changes: engine.changes.map(({ change }) => change),
+      })
+    ).not.toContain(previousShareMeta.password);
+  });
+
+  it('projects a refreshed View share ID to Table and standalone View documents', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const enabled = originalTable.enableViewShare(targetView.id())._unsafeUnwrap();
+    const previousShareId = enabled.shareId;
+    const nextShareId = `shr${'b'.repeat(16)}`;
+    const updated = TableUpdateViewShareIdSpec.create(targetView.id(), previousShareId, nextShareId)
+      .mutate(enabled.updateResult.table)
+      ._unsafeUnwrap();
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewShareIdRefreshedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewShareIdRefreshed.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousShareId,
+      nextShareId,
+      oldVersion: 17,
+      newVersion: 18,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    await realtimeTasks[0]!();
+
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'shareId'],
+        value: nextShareId,
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['shareId'],
+        value: nextShareId,
+      },
+    ]);
+    expect(engine.changes[1]?.options).toEqual({ version: 17 });
+    expect(
+      JSON.stringify({
+        ensures: engine.ensures.map(({ initial }) => initial),
+        changes: engine.changes.map(({ change }) => change),
+      })
+    ).not.toContain(previousShareId);
+  });
+
+  it('projects an enabled View share state to Table and standalone View documents', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const enabled = originalTable.enableViewShare(targetView.id())._unsafeUnwrap();
+    const updated = enabled.updateResult.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewShareEnabledRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewShareEnabled.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      shareId: enabled.shareId,
+      shareMeta: enabled.view.shareMeta()!,
+      oldVersion: 18,
+      newVersion: 19,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    await realtimeTasks[0]!();
+
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'enableShare'],
+        value: true,
+      },
+      {
+        type: 'set',
+        path: ['views', 0, 'shareId'],
+        value: enabled.shareId,
+      },
+      {
+        type: 'set',
+        path: ['views', 0, 'shareMeta'],
+        value: { includeRecords: true },
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      { type: 'set', path: ['enableShare'], value: true },
+      { type: 'set', path: ['shareId'], value: enabled.shareId },
+      { type: 'set', path: ['shareMeta'], value: { includeRecords: true } },
+    ]);
+    expect(engine.changes[1]?.options).toEqual({ version: 18 });
+  });
+
+  it('projects only the newly issued credential when re-enabling View sharing', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const firstEnabled = originalTable.enableViewShare(targetView.id())._unsafeUnwrap();
+    const disabled = firstEnabled.updateResult.table
+      .disableViewShare(targetView.id())
+      ._unsafeUnwrap();
+    const reenabled = disabled.updateResult.table.enableViewShare(targetView.id())._unsafeUnwrap();
+    const updated = reenabled.updateResult.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewShareEnabledRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewShareEnabled.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      shareId: reenabled.shareId,
+      shareMeta: reenabled.view.shareMeta()!,
+      oldVersion: 20,
+      newVersion: 21,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    await realtimeTasks[0]!();
+
+    expect(reenabled.shareId).not.toBe(firstEnabled.shareId);
+    expect(engine.changes[0]?.change).toEqual([
+      { type: 'set', path: ['views', 0, 'enableShare'], value: true },
+      {
+        type: 'set',
+        path: ['views', 0, 'shareId'],
+        value: reenabled.shareId,
+      },
+      {
+        type: 'set',
+        path: ['views', 0, 'shareMeta'],
+        value: { includeRecords: true },
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      { type: 'set', path: ['enableShare'], value: true },
+      { type: 'set', path: ['shareId'], value: reenabled.shareId },
+      { type: 'set', path: ['shareMeta'], value: { includeRecords: true } },
+    ]);
+    expect(
+      JSON.stringify({
+        ensures: engine.ensures.map(({ initial }) => initial),
+        changes: engine.changes.map(({ change }) => change),
+      })
+    ).not.toContain(firstEnabled.shareId);
+  });
+
+  it('projects a disabled View share state while retaining its credential metadata', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const enabled = originalTable.enableViewShare(targetView.id())._unsafeUnwrap();
+    const disabled = enabled.updateResult.table.disableViewShare(targetView.id())._unsafeUnwrap();
+    const updated = disabled.updateResult.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewShareDisabledRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewShareDisabled.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousShareId: enabled.shareId,
+      shareMeta: disabled.view.shareMeta(),
+      oldVersion: 19,
+      newVersion: 20,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    await realtimeTasks[0]!();
+
+    expect(engine.changes[0]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['views', 0, 'enableShare'],
+        value: false,
+      },
+      {
+        type: 'set',
+        path: ['views', 0, 'shareId'],
+        value: enabled.shareId,
+      },
+      {
+        type: 'set',
+        path: ['views', 0, 'shareMeta'],
+        value: { includeRecords: true },
+      },
+    ]);
+    expect(engine.changes[1]?.change).toEqual([
+      { type: 'set', path: ['enableShare'], value: false },
+      { type: 'set', path: ['shareId'], value: enabled.shareId },
+      { type: 'set', path: ['shareMeta'], value: { includeRecords: true } },
+    ]);
+    expect(engine.changes[1]?.options).toEqual({ version: 19 });
+  });
+
+  it('projects View locked state to Table and standalone View documents with persisted version', async () => {
+    const originalTable = buildTable('x', 'y', 'z');
+    const targetView = originalTable.views()[0]!;
+    const updated = originalTable.updateViewLocked(targetView.id(), true)._unsafeUnwrap()
+      .updateResult.table;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(updated);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewLockedUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewLockedUpdated.create({
+      baseId: updated.baseId(),
+      tableId: updated.id(),
+      viewId: targetView.id(),
+      previousIsLocked: undefined,
+      nextIsLocked: true,
+      oldVersion: 13,
+      newVersion: 14,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    expect(realtimeTasks).toHaveLength(1);
+    await realtimeTasks[0]!();
+
+    expect(engine.ensures.map(({ docId }) => docId.toString())).toEqual([
+      `tbl_${updated.baseId().toString()}/${updated.id().toString()}`,
+      `viw_${updated.id().toString()}/${targetView.id().toString()}`,
+    ]);
+    expect(engine.changes[0]).toMatchObject({
+      change: {
+        type: 'set',
+        path: ['views', 0, 'isLocked'],
+        value: true,
+        oldValue: undefined,
+      },
+    });
+    expect(engine.changes[1]?.change).toEqual({
+      type: 'set',
+      path: ['isLocked'],
+      value: true,
+      oldValue: undefined,
+    });
+    expect(engine.changes[1]?.options).toEqual({ version: 13 });
+  });
+
+  it('advances the standalone View version for an unchanged omitted locked state', async () => {
+    const table = buildTable('l', 'm', 'n');
+    const targetView = table.views()[0]!;
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(table);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewLockedUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewLockedUpdated.create({
+      baseId: table.baseId(),
+      tableId: table.id(),
+      viewId: targetView.id(),
+      previousIsLocked: undefined,
+      nextIsLocked: undefined,
+      oldVersion: 14,
+      newVersion: 15,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    await realtimeTasks[0]!();
+
+    expect(engine.changes).toHaveLength(1);
+    expect(engine.changes[0]?.change).toEqual({
+      type: 'set',
+      path: ['id'],
+      value: targetView.id().toString(),
+      oldValue: targetView.id().toString(),
+    });
+    expect(engine.changes[0]?.options).toEqual({ version: 14 });
+  });
+
+  it('projects View order to Table and standalone View documents with persisted version', async () => {
+    const table = buildTable('o', 'p', 'q');
+    const targetView = table.views()[0]!;
+    targetView.setOrder(ViewOrder.rehydrate(2.5)._unsafeUnwrap())._unsafeUnwrap();
+    const engine = new FakeRealtimeEngine();
+    const repository = new FakeTableRepository(table);
+    const mapper = new DefaultTableMapper();
+    const projection = new ViewOrderUpdatedRealtimeProjection(engine, repository, mapper);
+    const realtimeTasks = captureRealtimeTasks();
+    const event = ViewOrderUpdated.create({
+      baseId: table.baseId(),
+      tableId: table.id(),
+      viewId: targetView.id(),
+      previousOrder: ViewOrder.rehydrate(3)._unsafeUnwrap(),
+      nextOrder: ViewOrder.rehydrate(2.5)._unsafeUnwrap(),
+      oldVersion: 15,
+      newVersion: 16,
+    });
+
+    (await projection.handle(createContext(), event))._unsafeUnwrap();
+    await realtimeTasks[0]!();
+
+    expect(engine.changes[0]?.change).toEqual({
+      type: 'set',
+      path: ['views', 0, 'order'],
+      value: 2.5,
+      oldValue: 3,
+    });
+    expect(engine.changes[1]?.change).toEqual({
+      type: 'set',
+      path: ['order'],
+      value: 2.5,
+      oldValue: 3,
+    });
+    expect(engine.changes[1]?.options).toEqual({ version: 15 });
+  });
+
   it('updates view column meta when view exists', async () => {
     const table = buildTable('c', 'd', 'e');
     const viewId = table.views()[0]?.id() ?? ViewId.create(`viw${'a'.repeat(16)}`)._unsafeUnwrap();
@@ -1053,11 +1888,13 @@ describe('Realtime projections', () => {
     expect(engine.changes[1]?.docId.toString()).toBe(
       `viw_${table.id().toString()}/${viewId.toString()}`
     );
-    expect(engine.changes[1]?.change).toEqual({
-      type: 'set',
-      path: ['columnMeta'],
-      value: buildTableDto(table).views[0]?.columnMeta,
-    });
+    expect(engine.changes[1]?.change).toEqual([
+      {
+        type: 'set',
+        path: ['columnMeta'],
+        value: buildTableDto(table).views[0]?.columnMeta,
+      },
+    ]);
     expect(engine.changes[1]?.options).toEqual({ version: 7 });
   });
 
@@ -1902,14 +2739,17 @@ describe('Realtime projections', () => {
     const lookupOptionsChange = changes.find(
       (change) => JSON.stringify(change.path) === JSON.stringify(['lookupOptions'])
     );
-    expect(lookupOptionsChange?.value).toEqual(
+    expect(lookupOptionsChange).toEqual(
       expect.objectContaining({
-        linkFieldId: linkFieldId.toString(),
-        lookupFieldId: foreignTargetFieldId.toString(),
-        foreignTableId: foreignTableId.toString(),
-        fkHostTableName: expect.any(String),
-        selfKeyName: expect.any(String),
-        foreignKeyName: expect.any(String),
+        type: 'set',
+        value: expect.objectContaining({
+          linkFieldId: linkFieldId.toString(),
+          lookupFieldId: foreignTargetFieldId.toString(),
+          foreignTableId: foreignTableId.toString(),
+          fkHostTableName: expect.any(String),
+          selfKeyName: expect.any(String),
+          foreignKeyName: expect.any(String),
+        }),
       })
     );
 

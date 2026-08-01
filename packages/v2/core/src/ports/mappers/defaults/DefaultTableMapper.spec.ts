@@ -4,8 +4,8 @@ import { BaseId } from '../../../domain/base/BaseId';
 import { FieldId } from '../../../domain/table/fields/FieldId';
 import { FieldName } from '../../../domain/table/fields/FieldName';
 import { AttachmentField } from '../../../domain/table/fields/types/AttachmentField';
-import { ButtonField } from '../../../domain/table/fields/types/ButtonField';
 import { ButtonConfirm } from '../../../domain/table/fields/types/ButtonConfirm';
+import { ButtonField } from '../../../domain/table/fields/types/ButtonField';
 import { ButtonLabel } from '../../../domain/table/fields/types/ButtonLabel';
 import { ButtonMaxCount } from '../../../domain/table/fields/types/ButtonMaxCount';
 import { ButtonResetCount } from '../../../domain/table/fields/types/ButtonResetCount';
@@ -41,8 +41,8 @@ import { SelectOption } from '../../../domain/table/fields/types/SelectOption';
 import { SingleLineTextField } from '../../../domain/table/fields/types/SingleLineTextField';
 import { SingleLineTextShowAs } from '../../../domain/table/fields/types/SingleLineTextShowAs';
 import { SingleSelectField } from '../../../domain/table/fields/types/SingleSelectField';
-import { TimeZone } from '../../../domain/table/fields/types/TimeZone';
 import { TextDefaultValue } from '../../../domain/table/fields/types/TextDefaultValue';
+import { TimeZone } from '../../../domain/table/fields/types/TimeZone';
 import { UserDefaultValue } from '../../../domain/table/fields/types/UserDefaultValue';
 import { UserField } from '../../../domain/table/fields/types/UserField';
 import { UserMultiplicity } from '../../../domain/table/fields/types/UserMultiplicity';
@@ -56,10 +56,12 @@ import { GalleryView } from '../../../domain/table/views/types/GalleryView';
 import { GridView } from '../../../domain/table/views/types/GridView';
 import { KanbanView } from '../../../domain/table/views/types/KanbanView';
 import { PluginView } from '../../../domain/table/views/types/PluginView';
+import { ViewAuditMetadata } from '../../../domain/table/views/ViewAuditMetadata';
 import { ViewColumnMeta } from '../../../domain/table/views/ViewColumnMeta';
 import { ViewId } from '../../../domain/table/views/ViewId';
 import { ViewName } from '../../../domain/table/views/ViewName';
 import { ViewQueryDefaults } from '../../../domain/table/views/ViewQueryDefaults';
+import { ViewVersion } from '../../../domain/table/views/ViewVersion';
 import type { ITableFieldPersistenceDTO } from '../TableMapper';
 import { DefaultTableMapper } from './DefaultTableMapper';
 
@@ -376,6 +378,77 @@ describe('DefaultTableMapper', () => {
 
     const fieldDbNameResult = mapped.getFields()[0]?.dbFieldName();
     fieldDbNameResult?._unsafeUnwrap();
+  });
+
+  it('round-trips a lossless source filter separately from its canonical form', () => {
+    const table = buildTable();
+    if (!table) return;
+    const canonicalFilter = {
+      fieldId: `fld${'a'.repeat(16)}`,
+      operator: 'isAnyOf' as const,
+      value: ['alpha'],
+    };
+    const sourceFilter = {
+      conjunction: 'and',
+      filterSet: [
+        {
+          fieldId: canonicalFilter.fieldId,
+          operator: 'IN',
+          isSymbol: true,
+          value: 'alpha',
+        },
+      ],
+    };
+
+    const mapper = new DefaultTableMapper();
+    const originalDto = mapper.toDTO(table)._unsafeUnwrap();
+    const dto = {
+      ...originalDto,
+      views: originalDto.views.map((view, index) =>
+        index === 0
+          ? {
+              ...view,
+              query: { filter: canonicalFilter },
+              sourceFilter,
+            }
+          : view
+      ),
+    };
+    expect(dto.views[0]?.sourceFilter).toEqual(sourceFilter);
+
+    const mappedResult = mapper.toDomain(dto);
+    expect(
+      mappedResult.isOk(),
+      mappedResult.isErr() ? JSON.stringify(mappedResult.error) : undefined
+    ).toBe(true);
+    const mapped = mappedResult._unsafeUnwrap();
+    const mappedDefaults = mapped.views()[0]!.queryDefaults()._unsafeUnwrap();
+    expect(mappedDefaults.filter()).toEqual({
+      conjunction: 'and',
+      items: [canonicalFilter],
+    });
+    expect(mappedDefaults.sourceFilter()).toEqual(sourceFilter);
+  });
+
+  it('round-trips read-only metadata on View child entities', () => {
+    const table = buildTable();
+    const metadata = {
+      createdBy: 'creator',
+      createdTime: '2026-07-27T00:00:00.000Z',
+      lastModifiedBy: 'editor',
+      lastModifiedTime: '2026-07-27T01:00:00.000Z',
+    };
+    table.views()[0].setAuditMetadata(ViewAuditMetadata.rehydrate(metadata)._unsafeUnwrap());
+    table.views()[0].setVersion(ViewVersion.rehydrate(7)._unsafeUnwrap());
+    const mapper = new DefaultTableMapper();
+
+    const dto = mapper.toDTO(table)._unsafeUnwrap();
+    const mapped = mapper.toDomain(dto)._unsafeUnwrap();
+
+    expect(dto.views[0]).toMatchObject(metadata);
+    expect(dto.views[0]?.version).toBe(7);
+    expect(mapped.views()[0].auditMetadata()._unsafeUnwrap().toDto()).toEqual(metadata);
+    expect(mapped.views()[0].version()._unsafeUnwrap().toNumber()).toBe(7);
   });
 
   it('deduplicates select choices by name when rehydrating persistence dto', () => {

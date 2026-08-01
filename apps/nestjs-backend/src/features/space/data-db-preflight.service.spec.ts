@@ -117,6 +117,7 @@ const BASELINE_TABLES = [
   'record_history',
   'table_trash',
   'record_trash',
+  'record_removal_tombstone',
   '__undo_log',
   'attachments',
   'attachments_table',

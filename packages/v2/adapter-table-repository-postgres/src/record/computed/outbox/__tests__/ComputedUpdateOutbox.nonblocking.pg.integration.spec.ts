@@ -65,6 +65,14 @@ const createTaskInput = (planHash: string): ComputedUpdateOutboxTaskInput => ({
   extraSeedRecords: [],
   beforeImageRecords: [],
   steps: [{ level: 0, tableId: SEED_TABLE_ID, fieldIds: [FIELD_ID] }],
+  sameTableBatches: [
+    {
+      tableId: SEED_TABLE_ID,
+      steps: [{ level: 0, tableId: SEED_TABLE_ID, fieldIds: [FIELD_ID] }],
+      minLevel: 0,
+      maxLevel: 0,
+    },
+  ],
   edges: [],
   estimatedComplexity: 1,
   changeType: 'update',
@@ -255,6 +263,10 @@ describeNonBlocking('ComputedUpdateOutbox non-blocking locks (pg integration)', 
     expect(unwrap(first).merged).toBe(false);
     expect(unwrap(second).merged).toBe(true);
     expect(unwrap(second).taskId).toBe(unwrap(first).taskId);
+    const claimed = await outbox.claimBatch({ workerId: 'merge-worker', limit: 10 });
+    expect(unwrap(claimed)[0]?.sameTableBatches).toEqual(
+      createTaskInput('plan-free').sameTableBatches
+    );
   });
 
   it('enqueues without waiting while another session holds the merge lock', async () => {

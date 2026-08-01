@@ -112,17 +112,6 @@
     "help": "Відвідайте <HelpCenter /> для отримання додаткової інформації",
     "helpCenter": "Центр допомоги"
   },
-  "validation": {
-    "link": {
-      "batch_duplicate": "Неможливо пов'язати запис: у цьому ж пакеті його вже пов'язано іншим записом. У зв'язках один-до-багатьох кожен дочірній запис може належати лише одному батьківському запису.",
-      "one_many_duplicate": "Неможливо пов'язати запис: його вже пов'язано з іншим записом. У зв'язках один-до-багатьох кожен дочірній запис може належати лише одному батьківському запису.",
-      "one_one_duplicate": "Неможливо пов'язати запис: цільовий запис уже пов'язано іншим записом у зв'язку один-до-одного."
-    },
-    "field": {
-      "maxColumnLimit": "Таблиця \"{{tableName}}\" може містити не більше ніж {{maxFieldCount}} полів.",
-      "requiredExistingValues": "Не можна зробити поле \"{{fieldName}}\" обов'язковим, оскільки наявні записи містять порожні значення."
-    }
-  },
   "field": {
     "advancedProps": "Розширені властивості",
     "hide": "приховати",
@@ -488,6 +477,11 @@
       "fillFailed": "Не вдалося заповнити",
       "clearing": "Очищення...",
       "clearSuccessful": "Очистити успішно",
+      "archiveRecordConfirmTitle": "Архівувати записи",
+      "archiveRecordConfirmDescription": "Ця дія архівує {{recordCount}} записів. Архівовані записи можна переглядати та відновлювати з архіву таблиці.",
+      "archiveRecord": "Архівувати",
+      "archiving": "Архівування...",
+      "archiveSuccessful": "Архівування виконано",
       "deleting": "Видалення...",
       "deleteSuccessful": "Успішне видалення",
       "deleteStream": {
@@ -845,6 +839,8 @@
     "insertRecordBelow": "Вставте запис <input /> нижче",
     "deleteRecord": "Видалити запис",
     "deleteAllSelectedRecords": "Видалити всі вибрані записи",
+    "archiveRecord": "Архівувати запис",
+    "archiveAllSelectedRecords": "Архівувати всі вибрані записи",
     "editField": "Поле редагування",
     "insertFieldLeft": "Вставити ліворуч",
     "insertFieldRight": "Вставити праворуч",
@@ -909,11 +905,49 @@
     "title": "Ви хочете додати кілька записів?",
     "description": "{{count}} записів буде додано до таблиці."
   },
+  "tableArchive": {
+    "title": "Архів таблиці",
+    "menuTitle": "Архів",
+    "archivedTime": "Час архівування",
+    "archivedBy": "Ким архівовано",
+    "recordDetail": "Деталі запису",
+    "empty": "Немає архівованих записів",
+    "allCreators": "Усі створювачі",
+    "filterArchivedTime": "Час архівування",
+    "searchPlaceholder": "Пошук архівованих записів",
+    "clearFilter": "Скинути фільтри",
+    "export": "Експорт CSV",
+    "exporting": "Експорт… {{count}} рядків",
+    "exportSucceed": "Експорт завершено, починається завантаження",
+    "restoreSelected": "Відновити ({{count}})",
+    "permanentDeleteSelected": "Видалити назавжди ({{count}})",
+    "permanentDeleteConfirm": "Видалити назавжди {{count}} архівованих записів? Цю дію неможливо скасувати.",
+    "permanentDeleteSucceed": "Видалено назавжди",
+    "resetArchive": "Очистити архів",
+    "resetArchiveConfirm": "Очистити всі архівовані записи цієї таблиці? Цю дію неможливо скасувати.",
+    "resetSucceed": "Архів очищено",
+    "orderBy": {
+      "archivedTime": "Сортувати за часом архівування",
+      "recordCreatedTime": "Сортувати за часом створення",
+      "recordLastModifiedTime": "Сортувати за останньою зміною"
+    }
+  },
   "tableTrash": {
     "title": "Кошик",
     "resourceType": "Тип",
     "deletedResource": "Ресурс",
-    "moreResources": "і ще {{count}}"
+    "moreResources": "і ще {{count}}",
+    "deletedTime": "Час видалення",
+    "deletedBy": "Видалив",
+    "filterAllTypes": "Усі типи",
+    "filterAllUsers": "Усі користувачі",
+    "filterDeletedTime": "Час видалення",
+    "clearFilter": "Скинути фільтри",
+    "recordsDialogTitle": "Видалені записи ({{count}})",
+    "recordDetail": "Деталі запису",
+    "filterAllCreators": "Усі створювачі",
+    "filterCreatedTime": "Час створення",
+    "searchPlaceholder": "Пошук записів"
   },
   "baseShare": {
     "shareTitle": "Поділитися",
@@ -943,7 +977,10 @@
     "linkScopeDialogTitle": "Link field scope",
     "linkHolderCanCopyAndSave": "Може зберегти як копію",
     "linkHolderCanCopyAndSaveDesc": "Anyone with the link can save a copy to their space",
-    "editRequiresLogin": "Users must log in to edit records",
+    "copyToMySpace": "Copy to my space",
+    "saveToMySpace": "Save to my space",
+    "supportSaveCopy": "Збережіть копію у своєму просторі",
+    "editRequiresLogin": "Увійдіть, щоб редагувати записи",
     "enterPassword": "Введіть пароль",
     "allowCopyData": "Дозволити глядачам копіювати дані",
     "sharedNode": "Спільний вузол",

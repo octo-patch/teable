@@ -16,6 +16,7 @@ import type {
   ComputedBeforeImageRecord,
   ComputedDependencyEdge,
   ComputedUpdatePlan,
+  SameTableBatch,
   UpdateStep,
 } from '../ComputedUpdatePlanner';
 import { isAllTargetRecordsReason } from '../ComputedUpdatePlanner';
@@ -24,6 +25,13 @@ export type ComputedUpdateStepDto = {
   tableId: string;
   fieldIds: string[];
   level: number;
+};
+
+export type SameTableBatchDto = {
+  tableId: string;
+  steps: ComputedUpdateStepDto[];
+  minLevel: number;
+  maxLevel: number;
 };
 
 export type ComputedDependencyEdgeDto = {
@@ -100,6 +108,7 @@ export type ComputedUpdateOutboxPayload = {
   extraSeedRecords: ComputedUpdateSeedGroupDto[];
   beforeImageRecords: ComputedBeforeImageRecordDto[];
   steps: ComputedUpdateStepDto[];
+  sameTableBatches?: SameTableBatchDto[];
   edges: ComputedDependencyEdgeDto[];
   estimatedComplexity: number;
   changeType: ComputedUpdatePlan['changeType'];
@@ -152,6 +161,7 @@ export const serializeComputedUpdatePlan = (
     extraSeedRecords: serializeSeedGroups(plan.extraSeedRecords),
     beforeImageRecords: serializeBeforeImageRecords(plan.beforeImageRecords ?? []),
     steps: plan.steps.map(serializeStep),
+    sameTableBatches: plan.sameTableBatches.map(serializeSameTableBatch),
     edges: plan.edges.map(serializeEdge),
     estimatedComplexity: plan.estimatedComplexity,
     changeType: plan.changeType,
@@ -279,6 +289,53 @@ export const deserializeComputedUpdatePlan = (
   );
   if (stepsResult.isErr()) return err(stepsResult.error);
 
+  const sameTableBatchesResult = (payload.sameTableBatches ?? []).reduce<
+    Result<SameTableBatch[], DomainError>
+  >(
+    (acc, batch) =>
+      acc.andThen((batches) =>
+        TableId.create(batch.tableId).andThen((tableId) => {
+          const batchStepsResult = batch.steps.reduce<Result<UpdateStep[], DomainError>>(
+            (stepAcc, step) =>
+              stepAcc.andThen((steps) =>
+                TableId.create(step.tableId)
+                  .andThen((stepTableId) =>
+                    step.fieldIds
+                      .reduce<Result<FieldId[], DomainError>>(
+                        (fieldAcc, fieldId) =>
+                          fieldAcc.andThen((fieldIds) =>
+                            FieldId.create(fieldId).map((id) => {
+                              fieldIds.push(id);
+                              return fieldIds;
+                            })
+                          ),
+                        ok([])
+                      )
+                      .map((fieldIds) => ({ tableId: stepTableId, fieldIds, level: step.level }))
+                  )
+                  .map((resolved) => {
+                    steps.push(resolved);
+                    return steps;
+                  })
+              ),
+            ok([])
+          );
+
+          return batchStepsResult.map((steps) => {
+            batches.push({
+              tableId,
+              steps,
+              minLevel: batch.minLevel,
+              maxLevel: batch.maxLevel,
+            });
+            return batches;
+          });
+        })
+      ),
+    ok([])
+  );
+  if (sameTableBatchesResult.isErr()) return err(sameTableBatchesResult.error);
+
   const edgesResult = payload.edges.reduce<Result<ComputedDependencyEdge[], DomainError>>(
     (acc, edge) =>
       acc.andThen((edges) => {
@@ -389,9 +446,7 @@ export const deserializeComputedUpdatePlan = (
     edges: edgesResult.value,
     estimatedComplexity: payload.estimatedComplexity,
     changeType,
-    // Note: sameTableBatches are derived from steps at planning time,
-    // so we don't serialize/deserialize them. They will be empty for outbox tasks.
-    sameTableBatches: [],
+    sameTableBatches: sameTableBatchesResult.value,
     seedAllTableIds: payload.seedAllTableIds?.reduce<TableId[]>((acc, id) => {
       const result = TableId.create(id);
       if (result.isOk()) acc.push(result.value);
@@ -404,6 +459,13 @@ const serializeStep = (step: UpdateStep): ComputedUpdateStepDto => ({
   tableId: step.tableId.toString(),
   fieldIds: step.fieldIds.map((id) => id.toString()),
   level: step.level,
+});
+
+const serializeSameTableBatch = (batch: SameTableBatch): SameTableBatchDto => ({
+  tableId: batch.tableId.toString(),
+  steps: batch.steps.map(serializeStep),
+  minLevel: batch.minLevel,
+  maxLevel: batch.maxLevel,
 });
 
 const serializeEdge = (edge: ComputedDependencyEdge): ComputedDependencyEdgeDto => ({

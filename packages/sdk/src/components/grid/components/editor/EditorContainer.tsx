@@ -146,8 +146,9 @@ export const EditorContainerBase: ForwardRefRenderFunction<
     initialSearchRef.current = '';
 
     requestAnimationFrame(() => {
-      // Don't steal focus from dialogs/modals/sheets
-      if (document.activeElement?.closest('[role="dialog"]')) return;
+      // Don't steal focus from dialogs/modals/sheets — unless this grid itself lives inside it
+      const dialog = document.activeElement?.closest('[role="dialog"]');
+      if (dialog && !dialog.contains(defaultFocusRef.current)) return;
       (editorRef.current || defaultFocusRef.current)?.focus?.();
     });
   }, [cellType, activeCell, selection, isEditing]);

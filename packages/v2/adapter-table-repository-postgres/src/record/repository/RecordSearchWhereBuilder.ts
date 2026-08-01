@@ -1,5 +1,4 @@
 import {
-  CellValueType,
   type ConditionalLookupField,
   type ConditionalRollupField,
   type CreatedTimeField,
@@ -10,27 +9,27 @@ import {
   FieldType,
   FieldValueTypeVisitor,
   type FormulaField,
+  isSearchFieldTextProjection,
   type LastModifiedTimeField,
   type LookupField,
-  type NumberField,
-  type NumberFormatting,
   type RecordQuerySearch,
   type IRecordSearchAccessPath,
+  resolveSearchFieldTextShape,
   type RollupField,
+  type SearchFieldTextProjection,
+  type SearchFieldTextShape,
   type Table,
 } from '@teable/v2-core';
 import { sql, type Expression, type SqlBool } from 'kysely';
 import { ok, safeTry } from 'neverthrow';
 import type { Result } from 'neverthrow';
+
+import { buildStoredFieldValueExpression } from '../query-builder/stored/storedFieldValueExpression';
 import { getDateSearchRange } from './dateSearchRange';
 
 const fieldValueTypeVisitor = new FieldValueTypeVisitor();
 const escapeLikeWildcards = (input: string): string => {
   return input.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-};
-
-const escapePostgresRegex = (input: string): string => {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
 
 const isPostgresIdentifier = (input: string): boolean => {
@@ -42,57 +41,62 @@ type RecordSearchWhereBuilderOptions = {
   readonly searchAccessPath?: IRecordSearchAccessPath;
 };
 
+// Multi-value cells are physically jsonb; a direct cast plus text-level array
+// wrapping keeps this expression identical to the generated document DDL,
+// which must stay immutable — to_jsonb() and jsonb_build_array() are only
+// STABLE and are rejected by generated columns.
 const normalizeToJsonArray = (columnRef: Expression<unknown>) => sql`CASE
-  WHEN jsonb_typeof(to_jsonb(${columnRef})) = 'array' THEN to_jsonb(${columnRef})
-  WHEN to_jsonb(${columnRef}) IS NULL THEN '[]'::jsonb
-  ELSE jsonb_build_array(to_jsonb(${columnRef}))
+  WHEN jsonb_typeof((${columnRef})::jsonb) = 'array' THEN (${columnRef})::jsonb
+  WHEN (${columnRef})::jsonb IS NULL THEN '[]'::jsonb
+  ELSE ('[' || ((${columnRef})::jsonb)::text || ']')::jsonb
 END`;
 
-const buildLongTextExpression = (columnRef: Expression<unknown>) => sql<string>`REPLACE(
-  REPLACE(REPLACE(${columnRef}, CHR(13), ' '::text), CHR(10), ' '::text),
+const buildMultilineExpression = (columnRef: Expression<unknown>) => sql<string>`REPLACE(
+  REPLACE(REPLACE((${columnRef})::text, CHR(13), ' '::text), CHR(10), ' '::text),
   CHR(9),
   ' '::text
 )`;
 
-const buildStructuredSingleCondition = (columnRef: Expression<unknown>, searchValue: string) => {
-  return sql<SqlBool>`((${columnRef})::jsonb #>> '{title}') ILIKE ${`%${escapeLikeWildcards(searchValue)}%`} ESCAPE '\\'`;
+// jsonb renders arrays as `["a", "b"]`; strip the brackets, collapse the
+// `", "` element separators, and trim the outer quotes so the projected text
+// matches the `a, b` string users see in a cell. Titles containing quotes or
+// backslashes keep their jsonb escaping — the same projection runs in the
+// default predicate, the generated document, and the scoped rechecks, so all
+// paths agree on the (slightly escaped) text they match against.
+const buildJoinedJsonArrayText = (arrayExpr: Expression<unknown>) =>
+  sql<string>`btrim(replace(btrim((${arrayExpr})::text, '[]'), '", "', ', '), '"')`;
+
+const buildStructuredTitleListText = (columnRef: Expression<unknown>) =>
+  buildJoinedJsonArrayText(
+    sql`jsonb_path_query_array(${normalizeToJsonArray(columnRef)}, ${sql.raw(`'$[*].**."title"'`)})`
+  );
+
+const buildSearchProjectionText = (
+  columnRef: Expression<unknown>,
+  projection: SearchFieldTextProjection
+): Expression<string> => {
+  switch (projection.kind) {
+    case 'plain':
+      return sql<string>`(${columnRef})::text`;
+    case 'multiline':
+      return buildMultilineExpression(columnRef);
+    case 'structured_title':
+      return sql<string>`((${columnRef})::jsonb #>> '{title}')`;
+    case 'structured_title_list':
+      return buildStructuredTitleListText(columnRef);
+    case 'plain_list':
+      return buildJoinedJsonArrayText(normalizeToJsonArray(columnRef));
+    case 'rounded_number':
+      return sql<string>`ROUND((${columnRef})::numeric, ${projection.precision})::text`;
+  }
 };
 
-const buildPlainMultipleCondition = (columnRef: Expression<unknown>, searchValue: string) => {
-  const arrayExpr = normalizeToJsonArray(columnRef);
-  return sql<SqlBool>`
-    EXISTS (
-      SELECT 1
-      FROM (
-        SELECT string_agg(elem.value, ', ') AS aggregated
-        FROM jsonb_array_elements_text(${arrayExpr}) AS elem(value)
-      ) AS sub
-      WHERE sub.aggregated ~* ${escapePostgresRegex(searchValue)}
-    )
-  `;
-};
-
-const buildStructuredMultipleCondition = (columnRef: Expression<unknown>, searchValue: string) => {
-  const arrayExpr = normalizeToJsonArray(columnRef);
-  return sql<SqlBool>`
-    EXISTS (
-      WITH RECURSIVE f(e) AS (
-        SELECT ${arrayExpr}
-        UNION ALL
-        SELECT jsonb_array_elements(f.e)
-        FROM f
-        WHERE jsonb_typeof(f.e) = 'array'
-      )
-      SELECT 1
-      FROM (
-        SELECT string_agg((e ->> 'title')::text, ', ') AS aggregated
-        FROM f
-        WHERE jsonb_typeof(e) <> 'array'
-      ) AS sub
-      WHERE sub.aggregated ~* ${escapePostgresRegex(searchValue)}
-    )
-  `;
-};
+const buildProjectionContainsCondition = (
+  columnRef: Expression<unknown>,
+  projection: SearchFieldTextProjection,
+  searchValue: string
+) =>
+  sql<SqlBool>`${buildSearchProjectionText(columnRef, projection)} ILIKE ${`%${escapeLikeWildcards(searchValue)}%`} ESCAPE '\\'`;
 
 const buildNumberMultipleCondition = (
   columnRef: Expression<unknown>,
@@ -131,73 +135,6 @@ const buildDateMultipleCondition = (
         AND CAST(elem.value AS timestamp with time zone) < ${range.end}
     )
   `;
-};
-
-const resolveSearchShapeSourceField = (field: Field): Field => {
-  if (
-    field.type().equals(FieldType.lookup()) ||
-    field.type().equals(FieldType.conditionalLookup())
-  ) {
-    const innerField = field.type().equals(FieldType.lookup())
-      ? (field as LookupField).innerField()
-      : (field as ConditionalLookupField).innerField();
-    if (innerField.isOk()) {
-      return resolveSearchShapeSourceField(innerField.value);
-    }
-  }
-
-  return field;
-};
-
-const isStructuredStringField = (field: Field): boolean => {
-  const sourceField = resolveSearchShapeSourceField(field);
-  return (
-    sourceField.type().equals(FieldType.user()) ||
-    sourceField.type().equals(FieldType.createdBy()) ||
-    sourceField.type().equals(FieldType.lastModifiedBy()) ||
-    sourceField.type().equals(FieldType.link()) ||
-    sourceField.type().equals(FieldType.attachment())
-  );
-};
-
-const isLongTextField = (field: Field): boolean => {
-  return resolveSearchShapeSourceField(field).type().equals(FieldType.longText());
-};
-
-const isMultipleSelectField = (field: Field): boolean => {
-  return resolveSearchShapeSourceField(field).type().equals(FieldType.multipleSelect());
-};
-
-const resolveNumberFormatting = (field: Field): NumberFormatting | undefined => {
-  if (
-    field.type().equals(FieldType.lookup()) ||
-    field.type().equals(FieldType.conditionalLookup())
-  ) {
-    const innerField = field.type().equals(FieldType.lookup())
-      ? (field as LookupField).innerField()
-      : (field as ConditionalLookupField).innerField();
-    return innerField.isOk() ? resolveNumberFormatting(innerField.value) : undefined;
-  }
-
-  if (field.type().equals(FieldType.number())) {
-    return (field as NumberField).formatting();
-  }
-
-  if (
-    field.type().equals(FieldType.formula()) ||
-    field.type().equals(FieldType.rollup()) ||
-    field.type().equals(FieldType.conditionalRollup())
-  ) {
-    const formatting = field.type().equals(FieldType.formula())
-      ? (field as FormulaField).formatting()
-      : field.type().equals(FieldType.rollup())
-        ? (field as RollupField).formatting()
-        : (field as ConditionalRollupField).formatting();
-
-    return formatting instanceof DateTimeFormatting ? undefined : formatting;
-  }
-
-  return undefined;
 };
 
 const resolveDateTimeFormatting = (field: Field): DateTimeFormatting | undefined => {
@@ -240,10 +177,6 @@ const resolveDateTimeFormatting = (field: Field): DateTimeFormatting | undefined
   return undefined;
 };
 
-const resolveNumberPrecision = (field: Field): number => {
-  return resolveNumberFormatting(field)?.precision().toNumber() ?? 0;
-};
-
 const resolveColumnRef = (
   field: Field,
   tableAlias: string
@@ -251,7 +184,22 @@ const resolveColumnRef = (
   return field
     .dbFieldName()
     .andThen((dbFieldName) => dbFieldName.value())
-    .map((dbFieldName) => sql.ref(`${tableAlias}.${dbFieldName}`) as Expression<unknown>);
+    .andThen((dbFieldName) => buildStoredFieldValueExpression(field, tableAlias, dbFieldName))
+    .map(({ expression }) => expression as Expression<unknown>);
+};
+
+/**
+ * Whether a field produces a search predicate for this search. Date fields are
+ * excluded from all-field searches (matching hide-not-match semantics); they
+ * remain searchable when addressed explicitly by field key.
+ */
+const shapeProducesCondition = (
+  shape: SearchFieldTextShape,
+  search: RecordQuerySearch['search']
+): boolean => {
+  if (shape.kind === 'none') return false;
+  if (shape.kind === 'date_range' && search.searchesAllFields()) return false;
+  return true;
 };
 
 const buildFieldSearchCondition = (
@@ -260,37 +208,16 @@ const buildFieldSearchCondition = (
   tableAlias: string
 ): Result<Expression<SqlBool> | undefined, DomainError> => {
   return safeTry(function* () {
-    if (field.type().equals(FieldType.button())) {
+    const shape = yield* resolveSearchFieldTextShape(field);
+    if (!shapeProducesCondition(shape, search)) {
       return ok(undefined);
     }
 
     const columnRef = yield* resolveColumnRef(field, tableAlias);
-    const fieldValueType = yield* field.accept(fieldValueTypeVisitor);
-    const cellValueType = fieldValueType.cellValueType;
-    const isMultiple = fieldValueType.isMultipleCellValue.isMultiple();
 
-    if (cellValueType.equals(CellValueType.boolean()) && search.searchesAllFields()) {
-      return ok(undefined);
-    }
-
-    if (isStructuredStringField(field)) {
-      return ok(
-        isMultiple
-          ? buildStructuredMultipleCondition(columnRef, search.value)
-          : buildStructuredSingleCondition(columnRef, search.value)
-      );
-    }
-
-    if (cellValueType.equals(CellValueType.number())) {
-      const precision = resolveNumberPrecision(field);
-      return ok(
-        isMultiple
-          ? buildNumberMultipleCondition(columnRef, search.value, precision)
-          : sql<SqlBool>`ROUND(${columnRef}::numeric, ${precision})::text ILIKE ${`%${escapeLikeWildcards(search.value)}%`} ESCAPE '\\'`
-      );
-    }
-
-    if (cellValueType.equals(CellValueType.dateTime())) {
+    if (shape.kind === 'date_range') {
+      const fieldValueType = yield* field.accept(fieldValueTypeVisitor);
+      const isMultiple = fieldValueType.isMultipleCellValue.isMultiple();
       const formatting = resolveDateTimeFormatting(field);
       const range = getDateSearchRange(search.value, formatting);
       if (!range) {
@@ -304,32 +231,41 @@ const buildFieldSearchCondition = (
       );
     }
 
-    if (cellValueType.equals(CellValueType.boolean())) {
-      return ok(undefined);
+    if (shape.kind === 'rounded_number_list') {
+      return ok(buildNumberMultipleCondition(columnRef, search.value, shape.precision));
     }
 
-    if (isMultiple) {
-      if (isMultipleSelectField(field)) {
-        // multipleSelect stores a plain string[] of option names. Match the whole cell as text so
-        // the predicate is sargable against the gin_trgm index (built on the same "<col>"::text
-        // expression) instead of a jsonb_array_elements + regex subquery that cannot use it. Trades
-        // negligible precision (JSON brackets/quotes become matchable) for index usage.
-        return ok(
-          sql<SqlBool>`(${columnRef})::text ILIKE ${`%${escapeLikeWildcards(search.value)}%`} ESCAPE '\\'`
-        );
-      }
-      return ok(buildPlainMultipleCondition(columnRef, search.value));
+    if (isSearchFieldTextProjection(shape)) {
+      return ok(buildProjectionContainsCondition(columnRef, shape, search.value));
     }
 
-    if (isLongTextField(field)) {
-      return ok(
-        sql<SqlBool>`${buildLongTextExpression(columnRef)} ILIKE ${`%${escapeLikeWildcards(search.value)}%`} ESCAPE '\\'`
-      );
-    }
+    return ok(undefined);
+  });
+};
 
-    return ok(
-      sql<SqlBool>`${columnRef} ILIKE ${`%${escapeLikeWildcards(search.value)}%`} ESCAPE '\\'`
-    );
+export type RecordSearchFieldMatch = {
+  readonly field: Field;
+  readonly condition: Expression<SqlBool>;
+};
+
+export const buildRecordSearchFieldMatches = (
+  table: Table,
+  recordSearch: RecordQuerySearch | undefined,
+  options?: Pick<RecordSearchWhereBuilderOptions, 'tableAlias'>
+): Result<ReadonlyArray<RecordSearchFieldMatch>, DomainError> => {
+  if (!recordSearch) return ok([]);
+
+  return safeTry(function* () {
+    const tableAlias = options?.tableAlias ?? 't';
+    const fields = yield* recordSearch.search.resolveFields(table, {
+      visibleFieldIds: recordSearch.visibleFieldIds,
+    });
+    const matches: RecordSearchFieldMatch[] = [];
+    for (const field of fields) {
+      const condition = yield* buildFieldSearchCondition(field, recordSearch.search, tableAlias);
+      if (condition) matches.push({ field, condition });
+    }
+    return ok(matches);
   });
 };
 
@@ -338,34 +274,14 @@ const buildSearchVectorDocumentPart = (
   tableAlias: string
 ): Result<Expression<string>, DomainError> =>
   safeTry(function* () {
+    const shape = yield* resolveSearchFieldTextShape(field);
     const columnRef = yield* resolveColumnRef(field, tableAlias);
-    const fieldValueType = yield* field.accept(fieldValueTypeVisitor);
-    const isMultiple = fieldValueType.isMultipleCellValue.isMultiple();
 
-    if (isStructuredStringField(field)) {
-      if (!isMultiple) {
-        return ok(sql<string>`coalesce((${columnRef})::jsonb #>> '{title}', '')`);
-      }
-      const arrayExpr = normalizeToJsonArray(columnRef);
-      return ok(sql<string>`coalesce((
-        WITH RECURSIVE f(e) AS (
-          SELECT ${arrayExpr}
-          UNION ALL
-          SELECT jsonb_array_elements(f.e)
-          FROM f
-          WHERE jsonb_typeof(f.e) = 'array'
-        )
-        SELECT string_agg((e ->> 'title')::text, ', ')
-        FROM f
-        WHERE jsonb_typeof(e) <> 'array'
-      ), '')`);
+    if (isSearchFieldTextProjection(shape)) {
+      return ok(sql<string>`coalesce(${buildSearchProjectionText(columnRef, shape)}, '')`);
     }
 
-    return ok(
-      isLongTextField(field)
-        ? sql<string>`coalesce(${buildLongTextExpression(columnRef)}, '')`
-        : sql<string>`coalesce((${columnRef})::text, '')`
-    );
+    return ok(sql<string>`coalesce((${columnRef})::text, '')`);
   });
 const buildGeneratedTsvectorSearchCondition = (
   resolvedFields: ReadonlyArray<Field>,
@@ -467,32 +383,46 @@ const buildGeneratedTextSearchCondition = (
   if (accessPath.provider === 'pg_trgm' && probeLength < 3) return ok(undefined);
   if (accessPath.provider === 'pg_bigm' && probeLength < 2) return ok(undefined);
 
-  const resolvedFieldIds = new Set(resolvedFields.map((field) => field.id().toString()));
   const coveredFieldIds = new Set(accessPath.coveredFieldIds.map((fieldId) => fieldId.toString()));
-  if (
-    !coveredFieldIds.size ||
-    resolvedFields.some((field) => !coveredFieldIds.has(field.id().toString()))
-  ) {
-    return ok(undefined);
-  }
-  if (
-    recordSearch.search.searchesAllFields() &&
-    (accessPath.searchScope !== 'all_fields' || coveredFieldIds.size !== resolvedFieldIds.size)
-  ) {
-    return ok(undefined);
-  }
+  if (!coveredFieldIds.size) return ok(undefined);
 
-  return buildDefaultSearchCondition(resolvedFields, recordSearch, tableAlias).map(
-    (exactCondition) => {
-      if (!exactCondition) return undefined;
-      const pattern = `%${escapeLikeWildcards(recordSearch.search.value)}%`;
-      const documentRef = sql.ref(`${tableAlias}.${accessPath.generatedColumnName}`);
-      // pg_bigm indexes LIKE only. Keeping both providers on a normalized document gives the
-      // runtime one predicate shape; the original field predicate below remains the result oracle.
-      const indexedPrefilter = sql<SqlBool>`${documentRef} LIKE lower(${pattern}) ESCAPE '\\'`;
-      return sql<SqlBool>`(${indexedPrefilter}) AND (${exactCondition})`;
+  return safeTry(function* () {
+    // The prefilter is sound as long as every field that contributes a
+    // predicate has its projected text inside the generated document. Fields
+    // that never produce a predicate for this search (checkbox/button, dates
+    // in an all-field search) cannot cause a miss, so they neither need
+    // coverage nor block the indexed path.
+    const conditionFields: Field[] = [];
+    for (const field of resolvedFields) {
+      const shape = yield* resolveSearchFieldTextShape(field);
+      if (!shapeProducesCondition(shape, recordSearch.search)) continue;
+      // Shapes without a document projection (scoped date search, multi-value
+      // numbers) cannot be prefiltered by the document; fall back entirely.
+      if (!isSearchFieldTextProjection(shape)) {
+        return ok(undefined);
+      }
+      conditionFields.push(field);
     }
-  );
+
+    if (!conditionFields.length) return ok(undefined);
+    if (conditionFields.some((field) => !coveredFieldIds.has(field.id().toString()))) {
+      return ok(undefined);
+    }
+
+    const exactCondition = yield* buildDefaultSearchCondition(
+      resolvedFields,
+      recordSearch,
+      tableAlias
+    );
+    if (!exactCondition) return ok(undefined);
+
+    const pattern = `%${escapeLikeWildcards(recordSearch.search.value)}%`;
+    const documentRef = sql.ref(`${tableAlias}.${accessPath.generatedColumnName}`);
+    // pg_bigm indexes LIKE only. Keeping both providers on a normalized document gives the
+    // runtime one predicate shape; the original field predicate below remains the result oracle.
+    const indexedPrefilter = sql<SqlBool>`${documentRef} LIKE lower(${pattern}) ESCAPE '\\'`;
+    return ok(sql<SqlBool>`(${indexedPrefilter}) AND (${exactCondition})`);
+  });
 };
 
 export type RecordSearchWherePlan = {

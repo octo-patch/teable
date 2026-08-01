@@ -12,6 +12,7 @@ export * from './grid-enhancements';
 export * from './select-field-dialog';
 export * from './search';
 export * from './record-list';
+export * from './record-snapshot-grid';
 export * from './create-record';
 export * from './ReadOnlyTip';
 export * from './collaborator';

@@ -23,7 +23,7 @@ const shareDbErrorHandler = (error: unknown) => {
     window.location.reload();
     return;
   }
-  if (ignoreErrorCodes) {
+  if (ignoreErrorCodes.includes(code)) {
     return;
   }
   toast({ title: 'Socket Error', variant: 'destructive', description: `${code}: ${message}` });

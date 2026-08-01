@@ -2,7 +2,12 @@ import type { Result } from 'neverthrow';
 
 import type { DomainError } from '../../domain/shared/DomainError';
 import type { Table } from '../../domain/table/Table';
+import type { ViewAuditMetadataValue } from '../../domain/table/views/ViewAuditMetadata';
 import type { ViewColumnMetaValue } from '../../domain/table/views/ViewColumnMeta';
+import type {
+  ViewPropertiesValue,
+  ViewShareMetaValue,
+} from '../../domain/table/views/ViewProperties';
 import type { ViewQueryDefaultsDTO } from '../../domain/table/views/ViewQueryDefaults';
 
 export type ISingleLineTextFieldOptionsDTO = {
@@ -334,9 +339,21 @@ export type ITableFieldPersistenceDTO =
 export type ITableViewPersistenceDTOBase = {
   id: string;
   name: string;
+  version?: number;
+  order?: number;
+  description?: ViewPropertiesValue['description'];
   columnMeta: ViewColumnMetaValue;
   query?: ViewQueryDefaultsDTO;
+  sourceFilter?: unknown;
   options?: unknown;
+  isLocked?: ViewPropertiesValue['isLocked'];
+  enableShare?: ViewPropertiesValue['enableShare'];
+  shareId?: ViewPropertiesValue['shareId'];
+  shareMeta?: ViewShareMetaValue;
+  createdBy?: ViewAuditMetadataValue['createdBy'];
+  createdTime?: ViewAuditMetadataValue['createdTime'];
+  lastModifiedBy?: ViewAuditMetadataValue['lastModifiedBy'];
+  lastModifiedTime?: ViewAuditMetadataValue['lastModifiedTime'];
 };
 
 export type ITableViewPersistenceDTO =

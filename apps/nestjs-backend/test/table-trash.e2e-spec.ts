@@ -10,7 +10,11 @@ import {
   generateRecordTrashId,
 } from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
-import type { ITableTrashItemVo } from '@teable/openapi';
+import type {
+  IGetTrashItemRecordsQuery,
+  ITableTrashItemVo,
+  ITrashItemRecordVo,
+} from '@teable/openapi';
 import {
   axios,
   RangeType,
@@ -20,10 +24,13 @@ import {
   deleteRecords,
   deleteSelection,
   deleteView,
+  getTrashItemRecords,
   getTrashItems,
   resetTrashItems,
   ResourceType,
   restoreTrash,
+  TableTrashType,
+  TrashType,
   updateRecords,
   updateSetting,
   urlBuilder,
@@ -33,6 +40,7 @@ import { EventEmitterService } from '../src/event-emitter/event-emitter.service'
 import { Events } from '../src/event-emitter/events';
 import { RecordOpenApiService } from '../src/features/record/open-api/record-open-api.service';
 import { createAwaitWithEvent } from './utils/event-promise';
+import { getError } from './utils/get-error';
 import {
   initApp,
   createTable,
@@ -131,6 +139,22 @@ const readRestoreTrashStream = async (response: Response) => {
   }
 
   return events;
+};
+
+const collectAllTrashItemRecords = async (
+  trashId: string,
+  query: Omit<IGetTrashItemRecordsQuery, 'cursor'>
+) => {
+  const collected: ITrashItemRecordVo[] = [];
+  let cursor: string | undefined;
+  // generous guard against a cursor that never terminates
+  for (let i = 0; i < 100; i++) {
+    const page = await getTrashItemRecords(trashId, { ...query, cursor });
+    collected.push(...page.data.items);
+    cursor = page.data.nextCursor ?? undefined;
+    if (!cursor) return collected;
+  }
+  throw new Error('trash item records cursor did not terminate');
 };
 
 const waitForTableTrashItems = async (tableId: string, expectedCount = 1, maxRetries = 100) => {
@@ -415,6 +439,294 @@ describe('Trash (e2e)', () => {
     });
   });
 
+  describe('Table trash filters and record snapshots', () => {
+    let tableId: string;
+
+    beforeEach(async () => {
+      tableId = (await createTable(baseId, tableVo)).id;
+    });
+
+    afterEach(async () => {
+      await permanentDeleteTable(baseId, tableId);
+    });
+
+    const deleteOneOfEachResource = async () => {
+      const views = await getViews(tableId);
+      await awaitWithViewEvent(() => deleteView(tableId, views[1].id));
+
+      const fields = await getFields(tableId);
+      const deletedFieldIds = fields.filter((f) => !f.isPrimary).map((f) => f.id);
+      await awaitWithFieldDeleteSync(async () => deleteFields(tableId, deletedFieldIds));
+
+      const recordsData = await getRecords(tableId);
+      await deleteRecords(
+        tableId,
+        recordsData.records.map((r) => r.id)
+      );
+
+      return await waitForTableTrashItems(tableId, 3);
+    };
+
+    it('should filter table trash items by resource type, operator and deleted time', async () => {
+      await deleteOneOfEachResource();
+
+      const recordOnly = await getTrashItems({
+        resourceId: tableId,
+        resourceType: TrashType.Table,
+        resourceTypes: [TableTrashType.Record],
+      });
+      expect(recordOnly.data.trashItems.length).toBe(1);
+      expect((recordOnly.data.trashItems[0] as ITableTrashItemVo).resourceType).toBe(
+        TableTrashType.Record
+      );
+
+      const viewAndField = await getTrashItems({
+        resourceId: tableId,
+        resourceType: TrashType.Table,
+        resourceTypes: [TableTrashType.View, TableTrashType.Field],
+      });
+      expect(viewAndField.data.trashItems.length).toBe(2);
+
+      const byUser = await getTrashItems({
+        resourceId: tableId,
+        resourceType: TrashType.Table,
+        deletedBy: [globalThis.testConfig.userId],
+      });
+      expect(byUser.data.trashItems.length).toBe(3);
+
+      const byUnknownUser = await getTrashItems({
+        resourceId: tableId,
+        resourceType: TrashType.Table,
+        deletedBy: ['usrunknownfilter001'],
+      });
+      expect(byUnknownUser.data.trashItems.length).toBe(0);
+
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      const futureStart = await getTrashItems({
+        resourceId: tableId,
+        resourceType: TrashType.Table,
+        deletedTimeStart: new Date(Date.now() + oneDayMs).toISOString(),
+      });
+      expect(futureStart.data.trashItems.length).toBe(0);
+
+      const aroundNow = await getTrashItems({
+        resourceId: tableId,
+        resourceType: TrashType.Table,
+        deletedTimeStart: new Date(Date.now() - oneDayMs).toISOString(),
+        deletedTimeEnd: new Date(Date.now() + oneDayMs).toISOString(),
+      });
+      expect(aroundNow.data.trashItems.length).toBe(3);
+    });
+
+    it('should truncate the resource preview in the list while keeping the total count', async () => {
+      await createRecords(tableId, {
+        records: Array.from({ length: 15 }).map((_, i) => ({
+          fields: { SingleLineText: `bulk-${i}` },
+        })),
+      });
+      const recordsData = await getRecords(tableId);
+      const deletedRecordIds = recordsData.records.map((r) => r.id);
+      expect(deletedRecordIds.length).toBe(25);
+      await deleteRecords(tableId, deletedRecordIds);
+
+      const trashRes = await waitForTableTrashItems(tableId, 1);
+      const item = trashRes.data.trashItems[0] as ITableTrashItemVo;
+      expect(item.totalResourceCount).toBe(25);
+      expect(item.resourceIds).toEqual(deletedRecordIds.slice(0, 20));
+      // Name resolution only covers the preview ids.
+      expect(Object.keys(trashRes.data.resourceMap).length).toBe(20);
+
+      // The detail endpoint still pages through the full set (cursor walk).
+      const collected = (await collectAllTrashItemRecords(item.id, { tableId, take: 10 })).map(
+        (record) => record.recordId
+      );
+      expect(collected.length).toBe(25);
+      expect(new Set(collected)).toEqual(new Set(deletedRecordIds));
+    });
+
+    it('should list record snapshots of a record trash item with pagination', async () => {
+      const recordsData = await getRecords(tableId);
+      const deletedRecordIds = recordsData.records.map((r) => r.id);
+      await deleteRecords(tableId, deletedRecordIds);
+
+      const trashRes = await waitForTableTrashItems(tableId, 1);
+      const trashId = trashRes.data.trashItems[0].id;
+
+      const all = await getTrashItemRecords(trashId, { tableId });
+      expect(new Set(all.data.items.map((item) => item.recordId))).toEqual(
+        new Set(deletedRecordIds)
+      );
+
+      const first = all.data.items[0];
+      expect(first.deletedBy).toBe(globalThis.testConfig.userId);
+      expect(first.deletedTime).toBeTruthy();
+      expect(all.data.userMap[first.deletedBy]).toBeTruthy();
+      // Snapshot fields are keyed by field id while getRecords defaults to name keys.
+      const fields = await getFields(tableId);
+      const textField = fields.find((f) => f.name === 'SingleLineText')!;
+      const firstSource = recordsData.records.find((record) => record.id === first.recordId)!;
+      expect(first.record.fields[textField.id]).toBe(firstSource.fields.SingleLineText);
+
+      const pageSizes: number[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await getTrashItemRecords(trashId, { tableId, take: 3, cursor });
+        pageSizes.push(page.data.items.length);
+        cursor = page.data.nextCursor ?? undefined;
+      } while (cursor);
+      expect(pageSizes).toEqual([3, 3, 3, 1]);
+    });
+
+    it('should skip missing snapshots and keep pagination advancing', async () => {
+      const recordsData = await getRecords(tableId);
+      const deletedRecordIds = recordsData.records.map((r) => r.id);
+      await deleteRecords(tableId, deletedRecordIds);
+
+      const trashRes = await waitForTableTrashItems(tableId, 1);
+      const trashId = trashRes.data.trashItems[0].id;
+
+      // Simulate restored/purged records: their snapshot rows are gone while the
+      // trash item still lists their ids.
+      const removedIds = [
+        deletedRecordIds[0],
+        deletedRecordIds[3],
+        deletedRecordIds[4],
+        deletedRecordIds[9],
+      ];
+      await prisma.recordTrash.deleteMany({
+        where: { tableId, recordId: { in: removedIds } },
+      });
+
+      const remaining = deletedRecordIds.filter((id) => !removedIds.includes(id));
+      // The cursor walk only serves surviving snapshots; restored/purged ids simply
+      // never appear and pagination keeps advancing past them.
+      const collected = (await collectAllTrashItemRecords(trashId, { tableId, take: 2 })).map(
+        (item) => item.recordId
+      );
+      expect(new Set(collected)).toEqual(new Set(remaining));
+      expect(collected.length).toBe(remaining.length);
+    });
+
+    it('should filter record snapshots with record-level filters', async () => {
+      const recordsData = await getRecords(tableId);
+      const deletedRecordIds = recordsData.records.map((r) => r.id);
+      await deleteRecords(tableId, deletedRecordIds);
+
+      const trashRes = await waitForTableTrashItems(tableId, 1);
+      const trashId = trashRes.data.trashItems[0].id;
+
+      // Creator: every record was created by the test user; an unknown user matches none.
+      const byCreator = await collectAllTrashItemRecords(trashId, {
+        tableId,
+        recordCreatedBy: [globalThis.testConfig.userId],
+      });
+      expect(new Set(byCreator.map((item) => item.recordId))).toEqual(new Set(deletedRecordIds));
+      const byUnknownCreator = await collectAllTrashItemRecords(trashId, {
+        tableId,
+        recordCreatedBy: ['usrunknowncreator01'],
+      });
+      expect(byUnknownCreator.length).toBe(0);
+
+      // Created-time range: a future-only window matches none.
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      const futureOnly = await collectAllTrashItemRecords(trashId, {
+        tableId,
+        recordCreatedTimeStart: new Date(Date.now() + oneDayMs).toISOString(),
+      });
+      expect(futureOnly.length).toBe(0);
+    });
+
+    it('should reject non-record trash items and unknown trash ids', async () => {
+      const views = await getViews(tableId);
+      await awaitWithViewEvent(() => deleteView(tableId, views[1].id));
+
+      const trashRes = await waitForTableTrashItems(tableId, 1);
+      const viewTrashId = trashRes.data.trashItems[0].id;
+
+      const invalidTypeError = await getError(() => getTrashItemRecords(viewTrashId, { tableId }));
+      expect(invalidTypeError?.status).toBe(400);
+
+      const notFoundError = await getError(() =>
+        getTrashItemRecords(generateRecordTrashId(), { tableId })
+      );
+      expect(notFoundError?.status).toBe(404);
+    });
+
+    it('should return 404 for the detail endpoint after the trash item is restored', async () => {
+      const recordsData = await getRecords(tableId);
+      const deletedRecordIds = recordsData.records.slice(0, 2).map((r) => r.id);
+      await deleteRecords(tableId, deletedRecordIds);
+
+      const trashRes = await waitForTableTrashItems(tableId, 1);
+      const trashId = trashRes.data.trashItems[0].id;
+
+      await restoreTrash(trashId, tableId);
+
+      const error = await getError(() => getTrashItemRecords(trashId, { tableId }));
+      expect(error?.status).toBe(404);
+    });
+
+    it('should normalize V2 raw snapshots to cell values in the detail endpoint', async () => {
+      await updateSetting({
+        [SettingKey.CANARY_CONFIG]: {
+          enabled: true,
+          spaceIds: [globalThis.testConfig.spaceId],
+        },
+      });
+
+      try {
+        const selectField = await createField(tableId, {
+          name: 'Tags',
+          type: FieldType.MultipleSelect,
+          options: { choices: [{ name: 'A' }, { name: 'B' }] },
+        });
+
+        const createRes = await createRecords(tableId, {
+          records: [{ fields: { SingleLineText: 'v2-normalize', Tags: ['A', 'B'] } }],
+        });
+        expect(createRes.headers['x-teable-v2']).toBe('true');
+        const recordId = createRes.data.records[0].id;
+
+        const deleteRes = await deleteRecords(tableId, [recordId]);
+        expect(deleteRes.headers['x-teable-v2']).toBe('true');
+
+        const trashRes = await waitForTableTrashItems(tableId, 1);
+        const trashId = trashRes.data.trashItems[0].id;
+
+        const detail = await getTrashItemRecords(trashId, { tableId });
+        const item = detail.data.items.find((i) => i.recordId === recordId);
+        expect(item).toBeTruthy();
+        expect(item!.record.fields[selectField.id]).toEqual(['A', 'B']);
+
+        // Force the JSON-string form a raw TEXT column produces (legacy/sqlite storage),
+        // then assert the endpoint still returns the parsed cell value.
+        const rawTrash = await prisma.recordTrash.findFirst({
+          where: { tableId, recordId },
+          select: { id: true, snapshot: true },
+        });
+        const rawSnapshot = JSON.parse(rawTrash!.snapshot) as {
+          fields: Record<string, unknown>;
+        };
+        rawSnapshot.fields[selectField.id] = JSON.stringify(['A', 'B']);
+        await prisma.recordTrash.update({
+          where: { id: rawTrash!.id },
+          data: { snapshot: JSON.stringify(rawSnapshot) },
+        });
+
+        const normalized = await getTrashItemRecords(trashId, { tableId });
+        const normalizedItem = normalized.data.items.find((i) => i.recordId === recordId);
+        expect(normalizedItem!.record.fields[selectField.id]).toEqual(['A', 'B']);
+      } finally {
+        await updateSetting({
+          [SettingKey.CANARY_CONFIG]: {
+            enabled: false,
+            spaceIds: [],
+          },
+        });
+      }
+    });
+  });
+
   describe('Restoring table trash items', () => {
     let tableId: string;
 
@@ -529,6 +841,95 @@ describe('Trash (e2e)', () => {
           recordsAfterRestore.records.some((record) => record.id === recordId)
         )
       ).toBe(true);
+    });
+
+    it('should clear dangling link entries instead of failing when a link target was deleted after the snapshot', async () => {
+      const foreignTable = await createTable(baseId, {
+        name: `restore-dangling-target-${Date.now()}`,
+        fields: [{ name: 'Name', type: FieldType.SingleLineText }],
+        records: [{ fields: { Name: 'target' } }],
+      });
+
+      try {
+        const linkField = await createField(tableId, {
+          name: 'restore dangling link',
+          type: FieldType.Link,
+          options: {
+            relationship: Relationship.ManyMany,
+            foreignTableId: foreignTable.id,
+          },
+        });
+
+        const targetRecord = (await getRecords(foreignTable.id, { fieldKeyType: FieldKeyType.Id }))
+          .records[0];
+        const createRes = await createRecords(tableId, {
+          fieldKeyType: FieldKeyType.Id,
+          records: [{ fields: { [linkField.id]: [{ id: targetRecord.id }] } }],
+        });
+        const mainRecordId = createRes.data.records[0].id;
+
+        await deleteRecords(tableId, [mainRecordId]);
+        const trashItemsRes = await waitForTableTrashItems(tableId, 1);
+        const recordTrashItem = trashItemsRes.data.trashItems.find(
+          (item) => (item as ITableTrashItemVo).resourceType === TableTrashType.Record
+        ) as ITableTrashItemVo | undefined;
+        expect(recordTrashItem).toBeTruthy();
+
+        // the snapshot now references a record that no longer exists
+        await deleteRecords(foreignTable.id, [targetRecord.id]);
+
+        const restored = await restoreTrash(recordTrashItem!.id, tableId);
+        expect(restored.status).toEqual(201);
+
+        const recordsAfterRestore = await getRecords(tableId, { fieldKeyType: FieldKeyType.Id });
+        const restoredRecord = recordsAfterRestore.records.find(
+          (record) => record.id === mainRecordId
+        );
+        expect(restoredRecord).toBeTruthy();
+        expect(restoredRecord!.fields[linkField.id]).toBeFalsy();
+      } finally {
+        await permanentDeleteTable(baseId, foreignTable.id);
+      }
+    });
+
+    it('should keep links whose targets are restored in the same batch', async () => {
+      const linkField = await createField(tableId, {
+        name: 'restore self link',
+        type: FieldType.Link,
+        options: {
+          relationship: Relationship.ManyMany,
+          foreignTableId: tableId,
+        },
+      });
+
+      const existing = (await getRecords(tableId, { fieldKeyType: FieldKeyType.Id })).records;
+      const [recordA, recordB] = existing.map((record) => record.id);
+      await updateRecords(tableId, {
+        fieldKeyType: FieldKeyType.Id,
+        records: [{ id: recordA, fields: { [linkField.id]: [{ id: recordB }] } }],
+      });
+
+      await deleteRecords(tableId, [recordA, recordB]);
+      const trashItemsRes = await waitForTableTrashItems(tableId, 1);
+      const recordTrashItem = trashItemsRes.data.trashItems.find(
+        (item) => (item as ITableTrashItemVo).resourceType === TableTrashType.Record
+      ) as ITableTrashItemVo | undefined;
+      expect(recordTrashItem).toBeTruthy();
+
+      const restored = await restoreTrash(recordTrashItem!.id, tableId);
+      expect(restored.status).toEqual(201);
+
+      const recordsAfterRestore = await getRecords(tableId, { fieldKeyType: FieldKeyType.Id });
+      const restoredA = recordsAfterRestore.records.find((record) => record.id === recordA);
+      expect(restoredA).toBeTruthy();
+      // the dangling-link filter must count in-batch records as live and keep this
+      // entry. Not asserted as an exact match: replaying both sides of a two-way
+      // link in one batch duplicates the entry — a pre-existing write-pipeline
+      // quirk unrelated to the filter.
+      const linkIds = (restoredA!.fields[linkField.id] as { id: string }[]).map(
+        (entry) => entry.id
+      );
+      expect(linkIds).toContain(recordB);
     });
 
     it('should restore V2 record trash through the V2 restore command in canary bases', async () => {

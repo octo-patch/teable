@@ -20,6 +20,7 @@ export enum UploadType {
   Automation = 14,
   RecordHistory = 15,
   SpaceAvatar = 16,
+  RecordRemoval = 17,
 }
 
 export const signatureRoSchema = z.object({

@@ -386,6 +386,8 @@
       "tableTrashRead": "Lire la corbeille de la table",
       "tableTrashUpdate": "Mettre à jour la corbeille de la table",
       "tableTrashReset": "Réinitialiser la corbeille de la table",
+      "tableArchiveRead": "Lire l'archive de la table",
+      "tableArchiveManage": "Gérer l'archive de la table",
       "viewCreate": "Créer une vue",
       "viewDelete": "Supprimer une vue",
       "viewRead": "Lire une vue",
@@ -401,6 +403,7 @@
       "recordRead": "Lire un enregistrement",
       "recordUpdate": "Mettre à jour un enregistrement",
       "recordCopy": "Copy record",
+      "recordArchive": "Archiver l'enregistrement",
       "automationCreate": "Créer une automatisation",
       "automationDelete": "Supprimer une automatisation",
       "automationRead": "Lire une automatisation",
@@ -926,15 +929,18 @@
       "nameMaxLength": "Le nom est trop long. Le maximum est de {{max}} caractères.",
       "descriptionMaxLength": "La description est trop longue. Le maximum est de {{max}} caractères."
     },
-    "validation": {
-      "field": {
-        "unique": "Le champ doit avoir une valeur unique"
-      }
-    },
     "custom": {
       "fieldValueNotNull": "\"{{tableName}}\" champ \"{{fieldName}}\" ne permet pas les valeurs vides, veuillez les remplir complètement avant de soumettre.",
       "fieldValueDuplicate": "\"{{tableName}}\" champ \"{{fieldName}}\" ne permet pas les valeurs dupliquées, veuillez remplir une valeur unique avant de soumettre.",
+      "recordFieldValueNotNull": "Le champ \"{{fieldName}}\" ne permet pas les valeurs vides, veuillez le remplir complètement avant de soumettre.",
+      "recordFieldValueDuplicate": "Le champ \"{{fieldName}}\" ne permet pas les valeurs dupliquées, veuillez remplir une valeur unique avant de soumettre.",
       "linkFieldValueDuplicate": "\"{{fieldName}}\" champ ne permet pas les associations dupliquées avec le même enregistrement",
+      "linkBatchDuplicate": "Impossible de lier l'enregistrement : dans ce même lot, il est déjà lié par un autre enregistrement. Dans une relation un-à-plusieurs, chaque enregistrement enfant ne peut appartenir qu'à un seul enregistrement parent.",
+      "linkOneManyDuplicate": "Impossible de lier l'enregistrement : il est déjà lié à un autre enregistrement. Dans une relation un-à-plusieurs, chaque enregistrement enfant ne peut appartenir qu'à un seul enregistrement parent.",
+      "linkOneOneDuplicate": "Impossible de lier l'enregistrement : l'enregistrement cible est déjà lié par un autre enregistrement dans une relation un-à-un.",
+      "fieldMaxColumnLimit": "La table \"{{tableName}}\" peut contenir au maximum {{maxFieldCount}} champs.",
+      "fieldRequiredExistingValues": "Impossible de rendre le champ \"{{fieldName}}\" obligatoire, car des enregistrements existants contiennent des valeurs vides.",
+      "fieldUniqueExistingValues": "Impossible de rendre le champ \"{{fieldName}}\" unique, car des enregistrements existants contiennent des valeurs dupliquées.",
       "requestTimeout": "L'action actuelle est trop grande, veuillez réessayer avec un étendue plus petite.",
       "searchTimeOut": "La recherche a expiré, veuillez réduire l'ambito de la recherche et réessayer.",
       "dependencyNodeRequire": "Nœud de dépendance non testé, veuillez vérifier si tous les nœuds précédents ont été testés",
